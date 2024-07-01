@@ -1,0 +1,5062 @@
+# file_transfer.txt
+# TODO: Update the .wit files
+
+This an example for a file transfer app. This can be used as reference.
+
+
+File: Cargo.toml
+```
+[workspace]
+resolver = "2"
+members = [
+    "TEMPFILE",
+    "worker",
+    "download",
+    "list_files"
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+```
+
+File: metadata.json
+```
+{
+    "name": "TEMPFILE",
+    "description": "",
+    "image": "",
+    "properties": {
+        "package_name": "TEMPFILE",
+        "current_version": "0.1.0",
+        "publisher": "template.os",
+        "mirrors": [],
+        "code_hashes": {
+            "0.1.0": ""
+        },
+        "wit_version": 0,
+        "dependencies": []
+    },
+    "external_url": "",
+    "animation_url": ""
+}
+
+```
+
+File: list_files/Cargo.toml
+```
+[package]
+name = "list_files"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: list_files/src/lib.rs
+```
+use crate::kinode::process::TEMPFILE::{Request as TransferRequest, Response as TransferResponse};
+use kinode_process_lib::{
+    await_next_message_body, call_init, println, Address, Message, Request,
+};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "TEMPFILE-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+call_init!(init);
+fn init(_our: Address) {
+    let Ok(body) = await_next_message_body() else {
+        println!("failed to get args!");
+        return;
+    };
+
+    let who = String::from_utf8(body).unwrap_or_default();
+    if who.is_empty() {
+        println!("usage: list_files:TEMPFILE:template.os who");
+        return;
+    }
+
+    let target: Address = format!("{}@TEMPFILE:TEMPFILE:template.os", who)
+        .parse()
+        .unwrap();
+
+    let Ok(Ok(Message::Response { body, .. })) =
+        Request::to(target)
+            .body(serde_json::to_vec(&TransferRequest::ListFiles).unwrap())
+            .send_and_await_response(5)
+    else {
+        println!("did not receive expected Response from {who}");
+        return;
+    };
+
+    let Ok(TransferResponse::ListFiles(files)) = serde_json::from_slice(&body) else {
+        println!("did not receive expected ListFiles from {who}");
+        return;
+    };
+
+    println!(
+        "{}",
+        files.iter().
+            fold(format!("{who} available files:\nFile\t\tSize (bytes)\n"), |mut msg, file| {
+                msg.push_str(&format!(
+                    "{}\t\t{}", file.name.split('/').last().unwrap(),
+                    file.size,
+                ));
+                msg
+            })
+    );
+}
+
+```
+
+File: download/Cargo.toml
+```
+[package]
+name = "download"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: download/src/lib.rs
+```
+use crate::kinode::process::standard::{ProcessId as WitProcessId};
+use crate::kinode::process::TEMPFILE::{Address as WitAddress, Request as TransferRequest, DownloadRequest};
+use kinode_process_lib::{
+    await_next_message_body, call_init, println, Address, Message, ProcessId, Request,
+};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "TEMPFILE-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+impl From<Address> for WitAddress {
+    fn from(address: Address) -> Self {
+        WitAddress {
+            node: address.node,
+            process: address.process.into(),
+        }
+    }
+}
+
+impl From<ProcessId> for WitProcessId {
+    fn from(process: ProcessId) -> Self {
+        WitProcessId {
+            process_name: process.process_name,
+            package_name: process.package_name,
+            publisher_node: process.publisher_node,
+        }
+    }
+}
+
+call_init!(init);
+fn init(our: Address) {
+    let Ok(body) = await_next_message_body() else {
+        println!("failed to get args!");
+        return;
+    };
+
+    let args = String::from_utf8(body).unwrap_or_default();
+    let Some((name, who)) = args.split_once(" ") else {
+        println!("usage: download:TEMPFILE:template.os file_name who");
+        return
+    };
+    let our: Address = format!("{}@TEMPFILE:TEMPFILE:template.os", our.node())
+        .parse()
+        .unwrap();
+
+    let target: Address = format!("{}@TEMPFILE:TEMPFILE:template.os", who)
+        .parse()
+        .unwrap();
+
+    let Ok(Ok(Message::Response { .. })) =
+        Request::to(our)
+            .body(serde_json::to_vec(&TransferRequest::Download(DownloadRequest {
+                name: name.into(),
+                target: target.clone().into(),
+            })).unwrap())
+            .send_and_await_response(5)
+    else {
+        println!("download: did not receive expected Response from {target:?}");
+        return;
+    };
+}
+
+```
+
+File: TEMPFILE/Cargo.toml
+```
+[package]
+name = "TEMPFILE"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+multipart = "0.18.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: TEMPFILE/src/lib.rs
+```
+use crate::kinode::process::standard::{ProcessId as WitProcessId};
+use crate::kinode::process::TEMPFILE::{Address as WitAddress, Request as TransferRequest, Response as TransferResponse, WorkerRequest, DownloadRequest, ProgressRequest, FileInfo, InitializeRequest};
+use kinode_process_lib::{
+    await_message, call_init, our_capabilities, println, spawn,
+    vfs::{create_drive, metadata, open_dir, Directory, FileType},
+    Address, OnExit, ProcessId, Request, Response,
+};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "TEMPFILE-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+impl From<Address> for WitAddress {
+    fn from(address: Address) -> Self {
+        WitAddress {
+            node: address.node,
+            process: address.process.into(),
+        }
+    }
+}
+
+impl From<ProcessId> for WitProcessId {
+    fn from(process: ProcessId) -> Self {
+        WitProcessId {
+            process_name: process.process_name,
+            package_name: process.package_name,
+            publisher_node: process.publisher_node,
+        }
+    }
+}
+impl From<WitAddress> for Address {
+    fn from(address: WitAddress) -> Self {
+        Address {
+            node: address.node,
+            process: address.process.into(),
+        }
+    }
+}
+
+impl From<WitProcessId> for ProcessId {
+    fn from(process: WitProcessId) -> Self {
+        ProcessId {
+            process_name: process.process_name,
+            package_name: process.package_name,
+            publisher_node: process.publisher_node,
+        }
+    }
+}
+
+fn ls_files(files_dir: &Directory) -> anyhow::Result<Vec<FileInfo>> {
+    let entries = files_dir.read()?;
+    let files: Vec<FileInfo> = entries
+        .iter()
+        .filter_map(|file| match file.file_type {
+            FileType::File => match metadata(&file.path, None) {
+                Ok(metadata) => Some(FileInfo {
+                    name: file.path.clone(),
+                    size: metadata.len,
+                }),
+                Err(_) => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    Ok(files)
+}
+
+fn handle_transfer_request(
+    our: &Address,
+    source: &Address,
+    body: &[u8],
+    files_dir: &Directory,
+) -> anyhow::Result<()> {
+    match serde_json::from_slice(body)? {
+        TransferRequest::ListFiles => {
+            let files = ls_files(files_dir)?;
+
+            Response::new()
+                .body(serde_json::to_vec(&TransferResponse::ListFiles(files))?)
+                .send()?;
+        }
+        TransferRequest::Download(DownloadRequest { name, target }) => {
+            // spin up a worker, initialize based on whether it's a downloader or a sender.
+            let our_worker = spawn(
+                None,
+                &format!("{}/pkg/worker.wasm", our.package_id()),
+                OnExit::None,
+                our_capabilities(),
+                vec![],
+                false,
+            )?;
+
+            let our_worker_address = Address {
+                node: our.node.clone(),
+                process: our_worker,
+            };
+
+            if source.node == our.node {
+                // we want to download a file
+                let _resp = Request::new()
+                    .body(serde_json::to_vec(&WorkerRequest::Initialize(InitializeRequest {
+                        name: name.clone(),
+                        target_worker: None,
+                    }))?)
+                    .target(&our_worker_address)
+                    .send_and_await_response(5)??;
+
+                // send our initialized worker address to the other node
+                Request::new()
+                    .body(serde_json::to_vec(&TransferRequest::Download(DownloadRequest {
+                        name: name.clone(),
+                        target: our_worker_address.into(),
+                    }))?)
+                    .target::<Address>(target.clone().into())
+                    .send()?;
+            } else {
+                // they want to download a file
+                Request::new()
+                    .body(serde_json::to_vec(&WorkerRequest::Initialize(InitializeRequest {
+                        name: name.clone(),
+                        target_worker: Some(target),
+                    }))?)
+                    .target(&our_worker_address)
+                    .send()?;
+            }
+        }
+        TransferRequest::Progress(ProgressRequest { name, progress }) => {
+            println!("{} progress: {}%", name, progress);
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_message(our: &Address, files_dir: &Directory) -> anyhow::Result<()> {
+    let message = await_message()?;
+    handle_transfer_request(our, message.source(), message.body(), files_dir)
+}
+
+call_init!(init);
+fn init(our: Address) {
+    println!("begin");
+
+    let drive_path = create_drive(our.package_id(), "files", None).unwrap();
+    let files_dir = open_dir(&drive_path, false, None).unwrap();
+
+    loop {
+        match handle_message(&our, &files_dir) {
+            Ok(()) => {}
+            Err(e) => {
+                println!("error: {:?}", e);
+            }
+        };
+    }
+}
+
+```
+
+File: worker/Cargo.toml
+```
+[package]
+name = "worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: worker/src/lib.rs
+```
+use std::str::FromStr;
+
+use crate::kinode::process::standard::{ProcessId as WitProcessId};
+use crate::kinode::process::TEMPFILE::{Address as WitAddress, Request as TransferRequest, WorkerRequest, ProgressRequest, InitializeRequest, ChunkRequest};
+use kinode_process_lib::{
+    await_message, call_init, get_blob, println,
+    vfs::{open_dir, open_file, Directory, File, SeekFrom},
+    Address, Message, ProcessId, Request, Response,
+};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "TEMPFILE-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+impl From<Address> for WitAddress {
+    fn from(address: Address) -> Self {
+        WitAddress {
+            node: address.node,
+            process: address.process.into(),
+        }
+    }
+}
+
+impl From<ProcessId> for WitProcessId {
+    fn from(process: ProcessId) -> Self {
+        WitProcessId {
+            process_name: process.process_name,
+            package_name: process.package_name,
+            publisher_node: process.publisher_node,
+        }
+    }
+}
+impl From<WitAddress> for Address {
+    fn from(address: WitAddress) -> Self {
+        Address {
+            node: address.node,
+            process: address.process.into(),
+        }
+    }
+}
+
+impl From<WitProcessId> for ProcessId {
+    fn from(process: WitProcessId) -> Self {
+        ProcessId {
+            process_name: process.process_name,
+            package_name: process.package_name,
+            publisher_node: process.publisher_node,
+        }
+    }
+}
+
+const CHUNK_SIZE: u64 = 1048576; // 1MB
+
+fn handle_message(
+    our: &Address,
+    file: &mut Option<File>,
+    files_dir: &Directory,
+    size: &mut Option<u64>,
+) -> anyhow::Result<bool> {
+    let message = await_message()?;
+
+    match message {
+        Message::Request {
+            ref body,
+            ..
+        } => {
+            match serde_json::from_slice(body)? {
+                WorkerRequest::Initialize(InitializeRequest {
+                    name,
+                    target_worker,
+                }) => {
+                    // initialize command from main process,
+                    // sets up worker, matches on if it's a sender or receiver.
+                    // target_worker = None, we are receiver, else sender.
+
+                    // open/create empty file in both cases.
+                    let mut active_file =
+                        open_file(&format!("{}/{}", files_dir.path, &name), true, None)?;
+
+                    match target_worker {
+                        Some(target_worker) => {
+                            let target_worker: Address = target_worker.into();
+                            // we have a target, chunk the data, and send it.
+                            let size = active_file.metadata()?.len;
+                            let num_chunks = (size as f64 / CHUNK_SIZE as f64).ceil() as u64;
+
+                            // give the receiving worker a size request so it can track it's progress!
+                            Request::new()
+                                .body(serde_json::to_vec(&WorkerRequest::Size(size))?)
+                                .target(target_worker.clone())
+                                .send()?;
+
+                            active_file.seek(SeekFrom::Start(0))?;
+
+                            for i in 0..num_chunks {
+                                let offset = i * CHUNK_SIZE;
+                                let length = CHUNK_SIZE.min(size - offset);
+
+                                let mut buffer = vec![0; length as usize];
+                                active_file.read_at(&mut buffer)?;
+
+                                Request::new()
+                                    .body(serde_json::to_vec(&WorkerRequest::Chunk(ChunkRequest {
+                                        name: name.clone(),
+                                        offset,
+                                        length,
+                                    }))?)
+                                    .target(target_worker.clone())
+                                    .blob_bytes(buffer)
+                                    .send()?;
+                            }
+                            Response::new().body(serde_json::to_vec(&"Done")?).send()?;
+                            return Ok(true);
+                        }
+                        None => {
+                            // waiting for response, store created empty file.
+                            *file = Some(active_file);
+                            Response::new()
+                                .body(serde_json::to_vec(&"Started")?)
+                                .send()?;
+                        }
+                    }
+                }
+                // someone sending a chunk to us!
+                WorkerRequest::Chunk(ChunkRequest {
+                    name,
+                    offset,
+                    length,
+                }) => {
+                    let file = match file {
+                        Some(file) => file,
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "TEMPFILE worker: receive error: no file initialized"
+                            ));
+                        }
+                    };
+
+                    let bytes = match get_blob() {
+                        Some(blob) => blob.bytes,
+                        None => {
+                            return Err(anyhow::anyhow!("TEMPFILE worker: receive error: no blob"));
+                        }
+                    };
+
+                    // file.seek(SeekFrom::Start(offset))?; seek not necessary if the sends come in order.
+                    file.write_all(&bytes)?;
+                    // if sender has sent us a size, give a progress update to main transfer!
+                    if let Some(size) = size {
+                        let progress = ((offset + length) as f64 / *size as f64 * 100.0) as u64;
+
+                        // send update to main process
+                        let main_app = Address {
+                            node: our.node.clone(),
+                            process: ProcessId::from_str(
+                                "TEMPFILE:TEMPFILE:template.os",
+                            )?,
+                        };
+
+                        Request::new()
+                            .body(serde_json::to_vec(&TransferRequest::Progress(ProgressRequest {
+                                name,
+                                progress,
+                            }))?)
+                            .target(&main_app)
+                            .send()?;
+
+                        if progress >= 100 {
+                            return Ok(true);
+                        }
+                    }
+                }
+                WorkerRequest::Size(incoming_size) => {
+                    *size = Some(incoming_size);
+                }
+            }
+        }
+        _ => {
+            println!("worker: got something else than request...");
+        }
+    }
+    Ok(false)
+}
+
+call_init!(init);
+fn init(our: Address) {
+    println!("worker: begin");
+    let start = std::time::Instant::now();
+
+    let drive_path = format!("{}/files", our.package_id());
+    let files_dir = open_dir(&drive_path, false, None).unwrap();
+
+    let mut file: Option<File> = None;
+    let mut size: Option<u64> = None;
+
+    loop {
+        match handle_message(&our, &mut file, &files_dir, &mut size) {
+            Ok(exit) => {
+                if exit {
+                    println!(
+                        "worker: done: exiting, took {:?}",
+                        start.elapsed()
+                    );
+                    break;
+                }
+            }
+            Err(e) => {
+                println!("worker: error: {:?}", e);
+            }
+        };
+    }
+}
+
+```
+
+File: pkg/metadata.json
+```
+{
+    "package": "TEMPFILE",
+    "publisher": "template.os",
+    "version": [0, 1, 0]
+}
+
+```
+
+File: pkg/scripts.json
+```
+{
+    "download.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": false,
+        "request_capabilities": [
+            "TEMPFILE:TEMPFILE:template.os"
+        ],
+        "grant_capabilities": [
+            "TEMPFILE:TEMPFILE:template.os"
+        ]
+    },
+    "list_files.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": true,
+        "request_capabilities": [
+            "TEMPFILE:TEMPFILE:template.os"
+        ],
+        "grant_capabilities": [
+            "TEMPFILE:TEMPFILE:template.os"
+        ]
+    }
+}
+
+```
+
+File: pkg/manifest.json
+```
+[
+    {
+        "process_name": "TEMPFILE",
+        "process_wasm_path": "/TEMPFILE.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys",
+            "vfs:distro:sys"
+        ],
+        "grant_capabilities": [],
+        "public": true
+    }
+]
+
+```
+
+
+# common_interfaces.txt
+
+These are the common interfaces that you can query: 
+
+vectorbase interface: 
+
+```
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Request {
+    ListDatabases,
+    SubmitData {
+        database_name: String,
+        values: Vec<(String, String)>,
+    },
+    SemanticSearch {
+        database_name: String,
+        top_k: usize,
+        query: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Response {
+    ListDatabases(Vec<String>),
+    SubmitData,
+    SemanticSearch(Vec<(String, String)>),
+    Error(String),
+}
+```
+
+Open ai interface, for calling groq llm or open llm: 
+
+```
+pub mod openai {
+    use serde::Deserialize;
+    use serde::Serialize;
+    use std::collections::HashMap;
+    use derive_builder::Builder;
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub enum LLMRequest {
+        RegisterOpenaiApiKey(RegisterApiKeyRequest),
+        RegisterGroqApiKey(RegisterApiKeyRequest),
+        Embedding(EmbeddingRequest),
+        OpenaiChat(ChatRequest),
+        GroqChat(ChatRequest),
+        ChatImage(ChatImageRequest),
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct RegisterApiKeyRequest {
+        pub api_key: String,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct EmbeddingRequest {
+        pub input: Vec<String>,
+        pub model: String,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct ChatRequest {
+        pub model: String,
+        pub messages: Vec<Message>,
+        #[builder(default)]
+        pub frequency_penalty: Option<f64>,
+        #[builder(default)]
+        pub logit_bias: Option<HashMap<String, i32>>,
+        #[builder(default)]
+        pub logprobs: Option<bool>,
+        #[builder(default)]
+        pub top_logprobs: Option<i32>,
+        #[builder(default)]
+        pub max_tokens: Option<i32>,
+        #[builder(default)]
+        pub n: Option<i32>,
+        #[builder(default)]
+        pub presence_penalty: Option<f64>,
+        #[builder(default)]
+        pub response_format: Option<ResponseFormat>,
+        #[builder(default)]
+        pub seed: Option<i32>,
+        #[builder(default)]
+        pub stop: Option<Stop>,
+        #[builder(default)]
+        pub stream: Option<bool>,
+        #[builder(default)]
+        pub temperature: Option<f64>,
+        #[builder(default)]
+        pub top_p: Option<f64>,
+        #[builder(default)]
+        pub tools: Option<Vec<String>>,
+        #[builder(default)]
+        pub tool_choice: Option<ToolChoice>,
+        #[builder(default)]
+        pub user: Option<String>,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct ChatImageRequest {
+        pub model: String,
+        pub messages: Vec<ChatImageMessage>,
+        #[builder(default)]
+        pub frequency_penalty: Option<f64>,
+        #[builder(default)]
+        pub logit_bias: Option<HashMap<String, i32>>,
+        #[builder(default)]
+        pub logprobs: Option<bool>,
+        #[builder(default)]
+        pub top_logprobs: Option<i32>,
+        #[builder(default)]
+        pub max_tokens: Option<i32>,
+        #[builder(default)]
+        pub n: Option<i32>,
+        #[builder(default)]
+        pub presence_penalty: Option<f64>,
+        #[builder(default)]
+        pub response_format: Option<ResponseFormat>,
+        #[builder(default)]
+        pub seed: Option<i32>,
+        #[builder(default)]
+        pub stop: Option<Stop>,
+        #[builder(default)]
+        pub stream: Option<bool>,
+        #[builder(default)]
+        pub temperature: Option<f64>,
+        #[builder(default)]
+        pub top_p: Option<f64>,
+        #[builder(default)]
+        pub tools: Option<Vec<String>>,
+        #[builder(default)]
+        pub tool_choice: Option<ToolChoice>,
+        #[builder(default)]
+        pub user: Option<String>,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct Message {
+        pub role: String,
+        pub content: String,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct ChatImageMessage {
+        pub role: String,
+        pub content: Vec<ChatImageContent>,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct ChatImageContent {
+        #[serde(rename = "type")]
+        pub content_type: String,
+        #[builder(default)]
+        pub text: Option<String>,
+        #[serde(rename = "image_url")]
+        #[builder(default)]
+        pub image_url: Option<ImageUrl>,
+    }
+
+    
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct ImageUrl {
+        pub url: String,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    #[serde(untagged)]
+    pub enum ResponseFormat {
+        JsonObject { type_field: String },
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    #[serde(untagged)]
+    pub enum Stop {
+        String(String),
+        Array(Vec<String>),
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    #[serde(untagged)]
+    pub enum ToolChoice {
+        None,
+        Auto,
+        SpecificFunction {
+            type_field: String,
+            function: Function,
+        },
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Builder)]
+    pub struct Function {
+        pub name: String,
+    }
+
+    // TODO: Zena: Well great, we probably need an intermediate struct for the response.
+    // Why does openai make the jsons so dumb? People just want the response. (self.choices[0].message.content.clone())
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct ChatResponse {
+        pub id: Option<String>,
+        pub object: Option<String>,
+        pub created: Option<i64>,
+        pub model: Option<String>,
+        pub system_fingerprint: Option<String>,
+        pub choices: Vec<Choice>,
+        pub usage: Option<Usage>,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct Choice {
+        pub index: i32,
+        pub message: Message,
+        pub logprobs: Option<serde_json::Value>,
+        pub finish_reason: String,
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct Usage {
+        pub prompt_tokens: i32,
+        pub completion_tokens: Option<i32>,
+        pub total_tokens: i32,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub enum LLMResponse {
+        Ok,
+        Embedding(EmbeddingResponse),
+        Chat(ChatResponse),
+    }
+
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct EmbeddingResponse {
+        pub embeddings: Vec<Vec<f32>>, 
+    }
+
+}
+```
+
+Speech to text: 
+
+```
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum STTRequest {
+    RegisterApiKey(String),
+    OpenaiTranscribe(Vec<u8>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum STTResponse {
+    Ok,
+    OpenaiTranscribed(String),
+    Error(String),
+}
+```
+
+Telegram interface: 
+
+```
+/// API for the bot and the parent process.
+// TODO: Zena: We will have to make some kind of crawler that recurses through the imported types and reliably converts them to wit. Another solution might have to work too. 
+use frankenstein::{GetFileParams, GetUpdatesParams, Message, SendMessageParams, Update};
+use serde::{Deserialize, Serialize};
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TgRequest {
+    RegisterApiKey(TgInitialize),
+    Subscribe,
+    Unsubscribe,
+    /// Download a file from telegram.
+    GetFile(GetFileParams),
+    /// Send a message to a chat.
+    SendMessage(SendMessageParams),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TgResponse {
+    Ok, 
+    Update(TgUpdate),
+    Error(String),
+    /// Download a file from telegram. Blobs included
+    GetFile,
+    /// Send a message to a chat.
+    SendMessage(Message),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TgInitialize {
+    pub token: String,
+    pub params: Option<GetUpdatesParams>,
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TgUpdate {
+    pub updates: Vec<Update>,
+}
+```
+
+
+
+# process_lib.txt
+
+This is the process lib that is used in processes. We will provide signatures and types. Please strictly adhere to these. 
+
+Request 
+```
+pub struct Request {
+    pub target: Option<Address>,
+    pub inherit: bool,
+    pub timeout: Option<u64>,
+    pub body: Option<Vec<u8>>,
+    pub metadata: Option<String>,
+    pub blob: Option<LazyLoadBlob>,
+    pub context: Option<Vec<u8>>,
+    pub capabilities: Vec<Capability>,
+}
+
+impl Request {
+    pub fn new() -> Self
+    pub fn to<T: Into<Address>>(target: T) -> Self
+    pub fn target<T: Into<Address>>(mut self, target: T) -> Self
+    pub fn inherit(mut self, inherit: bool) -> Self
+    pub fn expects_response(mut self, timeout: u64) -> Self
+    pub fn body<T: Into<Vec<u8>>>(mut self, body: T) -> Self
+    pub fn try_body<T: TryInto<Vec<u8>, Error = anyhow::Error>>(mut self, body: T) -> anyhow::Result<Self>
+    pub fn metadata(mut self, metadata: &str) -> Self
+    pub fn blob(mut self, blob: LazyLoadBlob) -> Self
+    pub fn blob_mime(mut self, mime: &str) -> Self
+    pub fn blob_bytes<T: Into<Vec<u8>>>(mut self, bytes: T) -> Self
+    pub fn try_blob_bytes<T: TryInto<Vec<u8>, Error = anyhow::Error>>(mut self, bytes: T) -> anyhow::Result<Self>
+    pub fn context<T: Into<Vec<u8>>>(mut self, context: T) -> Self
+    pub fn try_context<T: TryInto<Vec<u8>, Error = anyhow::Error>>(mut self, context: T) -> anyhow::Result<Self>
+    pub fn capabilities(mut self, capabilities: Vec<Capability>) -> Self
+    pub fn attach_messaging(mut self, our: &Address)
+    pub fn send(self) -> anyhow::Result<()>
+    pub fn send_and_await_response(self, timeout: u64) -> anyhow::Result<Result<Message, SendError>>
+}
+
+impl Default for Request {
+    fn default() -> Self
+}
+```
+
+Response
+```
+pub struct Response {
+    inherit: bool,
+    body: Option<Vec<u8>>,
+    metadata: Option<String>,
+    blob: Option<LazyLoadBlob>,
+    capabilities: Vec<Capability>,
+}
+
+impl Response {
+    pub fn new() -> Self
+    pub fn inherit(mut self, inherit: bool) -> Self
+    pub fn body<T: Into<Vec<u8>>>(mut self, body: T) -> Self
+    pub fn try_body<T: TryInto<Vec<u8>, Error = anyhow::Error>>(mut self, body: T) -> anyhow::Result<Self>
+    pub fn metadata(mut self, metadata: &str) -> Self
+    pub fn blob(mut self, blob: LazyLoadBlob) -> Self
+    pub fn blob_mime(mut self, mime: &str) -> Self
+    pub fn blob_bytes<T: Into<Vec<u8>>>(mut self, bytes: T) -> Self
+    pub fn try_blob_bytes<T: TryInto<Vec<u8>, Error = anyhow::Error>>(mut self, bytes: T) -> anyhow::Result<Self>
+    pub fn capabilities(mut self, capabilities: Vec<Capability>) -> Self
+    pub fn send(self) -> anyhow::Result<()>
+}
+
+impl Default for Response {
+    fn default() -> Self
+}
+```
+
+Message
+```
+pub enum Message {
+    Request {
+        source: Address,
+        expects_response: Option<u64>,
+        body: Vec<u8>,
+        metadata: Option<String>,
+        capabilities: Vec<Capability>,
+    },
+    Response {
+        source: Address,
+        body: Vec<u8>,
+        metadata: Option<String>,
+        context: Option<Vec<u8>>,
+        capabilities: Vec<Capability>,
+    },
+}
+
+impl Message {
+    pub fn source(&self) -> &Address
+    pub fn body(&self) -> &[u8]
+    pub fn metadata(&self) -> Option<&str>
+    pub fn context(&self) -> Option<&[u8]>
+    pub fn blob(&self) -> Option<LazyLoadBlob>
+    pub fn capabilities(&self) -> &Vec<Capability>
+    pub fn is_request(&self) -> bool
+    pub fn is_local(&self, our: &Address) -> bool
+    pub fn is_process<T>(&self, process: T) -> bool where ProcessId: PartialEq<T>
+}
+
+pub enum SendErrorKind {
+    Offline,
+    Timeout,
+}
+
+impl SendErrorKind {
+    pub fn is_offline(&self) -> bool
+    pub fn is_timeout(&self) -> bool
+}
+
+pub struct SendError {
+    pub kind: SendErrorKind,
+    pub message: Message,
+    pub lazy_load_blob: Option<LazyLoadBlob>,
+    pub context: Option<Vec<u8>>,
+}
+
+impl SendError {
+    pub fn kind(&self) -> &SendErrorKind
+    pub fn message(&self) -> &Message
+    pub fn blob(&self) -> Option<&LazyLoadBlob>
+    pub fn context(&self) -> Option<&[u8]>
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+}
+
+impl std::error::Error for SendError {
+    fn description(&self) -> &str
+}
+
+pub fn wit_message_to_message(source: Address, message: crate::kinode::process::standard::Message) -> Message
+```
+
+Address
+```
+pub struct Address {
+    pub node: String,
+    pub process: ProcessId,
+}
+
+impl Address {
+    pub fn new<T, U>(node: T, process: U) -> Address
+    where
+        T: Into<String>,
+        U: Into<ProcessId>;
+
+    pub fn node(&self) -> &str;
+    pub fn process(&self) -> &str;
+    pub fn package(&self) -> &str;
+    pub fn publisher(&self) -> &str;
+    pub fn package_id(&self) -> PackageId;
+}
+
+impl std::str::FromStr for Address {
+    type Err = AddressParseError;
+    fn from_str(input: &str) -> Result<Self, AddressParseError>;
+}
+
+impl Serialize for Address;
+impl<'a> Deserialize<'a> for Address;
+impl Hash for Address;
+impl Eq for Address;
+impl PartialEq for Address;
+impl From<&Address> for Address;
+impl<T, U, V, W> From<(T, U, V, W)> for Address
+where
+    T: Into<String>,
+    U: Into<&'static str>,
+    V: Into<&'static str>,
+    W: Into<&'static str>;
+impl<T> From<(&str, T)> for Address
+where
+    T: Into<ProcessId>;
+impl std::fmt::Display for Address;
+
+pub enum AddressParseError {
+    TooManyColons,
+    MissingNodeId,
+    MissingField,
+}
+```
+
+ProcessId 
+```
+pub struct ProcessId {
+    pub process_name: String,
+    pub package_name: String,
+    pub publisher_node: String,
+}
+
+impl ProcessId {
+    pub fn new(process_name: Option<&str>, package_name: &str, publisher_node: &str) -> Self;
+    pub fn process(&self) -> &str;
+    pub fn package(&self) -> &str;
+    pub fn publisher(&self) -> &str;
+}
+
+impl std::str::FromStr for ProcessId {
+    type Err = ProcessIdParseError;
+    fn from_str(input: &str) -> Result<Self, ProcessIdParseError>;
+}
+
+impl Serialize for ProcessId;
+impl<'a> Deserialize<'a> for ProcessId;
+impl Hash for ProcessId;
+impl Eq for ProcessId;
+impl PartialEq for ProcessId;
+impl From<&ProcessId> for ProcessId;
+impl<T, U, V> From<(T, U, V)> for ProcessId
+where
+    T: Into<String>,
+    U: Into<String>,
+    V: Into<String>;
+impl std::fmt::Display for ProcessId;
+impl PartialEq<ProcessId> for &str;
+
+pub enum ProcessIdParseError {
+    TooManyColons,
+    MissingField,
+}
+```
+
+PackageId
+```
+pub struct PackageId {
+    package_name: String,
+    publisher_node: String,
+}
+
+impl PackageId {
+    pub fn new(package_name: &str, publisher_node: &str) -> Self;
+    pub fn package(&self) -> &str;
+    pub fn publisher(&self) -> &str;
+}
+
+impl std::str::FromStr for PackageId {
+    type Err = ProcessIdParseError;
+    fn from_str(input: &str) -> Result<Self, ProcessIdParseError>;
+}
+
+impl std::fmt::Display for PackageId;
+```
+
+Capabilities
+```
+pub struct Capability {
+    pub issuer: Address,
+    pub params: String,
+}
+
+impl Capability {
+    pub fn new<T, U>(address: T, params: U) -> Capability
+    where
+        T: Into<Address>,
+        U: Into<String>;
+    pub fn issuer(&self) -> &Address;
+    pub fn params(&self) -> &str;
+}
+
+impl Serialize for Capability;
+impl<'a> Deserialize<'a> for Capability;
+impl Hash for Capability;
+impl Eq for Capability;
+impl PartialEq for Capability;
+impl From<&Capability> for Capability;
+impl<T> From<(T, &str)> for Capability
+where
+    T: Into<Address>;
+impl std::fmt::Display for Capability;
+```
+
+OnExit
+```
+pub enum OnExit {
+    None,
+    Restart,
+    Requests(Vec<Request>),
+}
+
+impl OnExit {
+    pub fn get() -> Self
+    pub fn is_none(&self) -> bool
+    pub fn is_restart(&self) -> bool
+    pub fn is_requests(&self) -> bool
+    pub fn get_requests(&self) -> Option<&[Request]>
+    pub fn add_request(self, new: Request) -> anyhow::Result<()>
+    pub fn set(self) -> anyhow::Result<()>
+    fn _to_standard(self) -> anyhow::Result<crate::kinode::process::standard::OnExit>
+}
+```
+
+LazyLoadBlob
+```
+pub struct LazyLoadBlob {
+    pub mime: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+impl std::default::Default for LazyLoadBlob {
+    fn default() -> Self
+}
+
+impl std::cmp::PartialEq for LazyLoadBlob {
+    fn eq(&self, other: &Self) -> bool
+}
+```
+
+Error Types
+```
+pub enum SendErrorKind {
+    Offline,
+    Timeout,
+}
+
+impl SendErrorKind {
+    pub fn is_offline(&self) -> bool
+    pub fn is_timeout(&self) -> bool
+}
+
+pub struct SendError {
+    pub kind: SendErrorKind,
+    pub message: Message,
+    pub lazy_load_blob: Option<LazyLoadBlob>,
+    pub context: Option<Vec<u8>>,
+}
+
+impl SendError {
+    pub fn kind(&self) -> &SendErrorKind
+    pub fn message(&self) -> &Message
+    pub fn blob(&self) -> Option<&LazyLoadBlob>
+    pub fn context(&self) -> Option<&[u8]>
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+}
+
+impl std::error::Error for SendError {
+    fn description(&self) -> &str
+}
+
+pub enum AddressParseError {
+    TooManyColons,
+    MissingNodeId,
+    MissingField,
+}
+
+impl std::fmt::Display for AddressParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+}
+
+impl std::error::Error for AddressParseError {
+    fn description(&self) -> &str
+}
+
+pub enum ProcessIdParseError {
+    TooManyColons,
+    MissingField,
+}
+
+impl std::fmt::Display for ProcessIdParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+}
+
+impl std::error::Error for ProcessIdParseError {
+    fn description(&self) -> &str
+}
+```
+
+
+eth.rs
+```
+// Types
+
+pub enum EthAction {
+    SubscribeLogs { sub_id: u64, chain_id: u64, kind: SubscriptionKind, params: Params },
+    UnsubscribeLogs(u64),
+    Request { chain_id: u64, method: String, params: serde_json::Value },
+}
+
+pub type EthSubResult = Result<EthSub, EthSubError>;
+
+pub struct EthSub {
+    pub id: u64,
+    pub result: SubscriptionResult,
+}
+
+pub struct EthSubError {
+    pub id: u64,
+    pub error: String,
+}
+
+pub enum EthResponse {
+    Ok,
+    Response { value: serde_json::Value },
+    Err(EthError),
+}
+
+pub enum EthError {
+    MalformedRequest,
+    NoRpcForChain,
+    SubscriptionClosed(u64),
+    InvalidMethod(String),
+    InvalidParams,
+    PermissionDenied,
+    RpcTimeout,
+    RpcMalformedResponse,
+}
+
+pub enum EthConfigAction {
+    AddProvider(ProviderConfig),
+    RemoveProvider((u64, String)),
+    SetPublic,
+    SetPrivate,
+    AllowNode(String),
+    UnallowNode(String),
+    DenyNode(String),
+    UndenyNode(String),
+    SetProviders(SavedConfigs),
+    GetProviders,
+    GetAccessSettings,
+    GetState,
+}
+
+pub enum EthConfigResponse {
+    Ok,
+    Providers(SavedConfigs),
+    AccessSettings(AccessSettings),
+    PermissionDenied,
+    State { active_subscriptions: HashMap<Address, HashMap<u64, Option<String>>>, outstanding_requests: HashSet<u64> },
+}
+
+pub struct AccessSettings {
+    pub public: bool,
+    pub allow: HashSet<String>,
+    pub deny: HashSet<String>,
+}
+
+pub type SavedConfigs = HashSet<ProviderConfig>;
+
+pub struct ProviderConfig {
+    pub chain_id: u64,
+    pub trusted: bool,
+    pub provider: NodeOrRpcUrl,
+}
+
+pub enum NodeOrRpcUrl {
+    Node { kns_update: KnsUpdate, use_as_provider: bool },
+    RpcUrl(String),
+}
+
+pub struct Provider {
+    chain_id: u64,
+    request_timeout: u64,
+}
+
+// Function signatures
+
+impl Provider {
+    // Create a new Provider instance
+    pub fn new(chain_id: u64, request_timeout: u64) -> Self
+
+    // Send a request and parse the response
+    pub fn send_request_and_parse_response<T: serde::de::DeserializeOwned>(&self, action: EthAction) -> Result<T, EthError>
+
+    // Get current block number
+    pub fn get_block_number(&self) -> Result<u64, EthError>
+
+    // Get balance of an address
+    pub fn get_balance(&self, address: Address, tag: Option<BlockId>) -> Result<U256, EthError>
+
+    // Get logs based on filter
+    pub fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, EthError>
+
+    // Get current gas price
+    pub fn get_gas_price(&self) -> Result<U256, EthError>
+
+    // Get transaction count for an address
+    pub fn get_transaction_count(&self, address: Address, tag: Option<BlockId>) -> Result<U256, EthError>
+
+    // Get block by hash
+    pub fn get_block_by_hash(&self, hash: BlockHash, full_tx: bool) -> Result<Option<Block>, EthError>
+
+    // Get block by number
+    pub fn get_block_by_number(&self, number: BlockNumberOrTag, full_tx: bool) -> Result<Option<Block>, EthError>
+
+    // Get storage at address and key
+    pub fn get_storage_at(&self, address: Address, key: U256, tag: Option<BlockId>) -> Result<Bytes, EthError>
+
+    // Get code at address
+    pub fn get_code_at(&self, address: Address, tag: BlockId) -> Result<Bytes, EthError>
+
+    // Get transaction by hash
+    pub fn get_transaction_by_hash(&self, hash: TxHash) -> Result<Option<Transaction>, EthError>
+
+    // Get transaction receipt
+    pub fn get_transaction_receipt(&self, hash: TxHash) -> Result<Option<TransactionReceipt>, EthError>
+
+    // Estimate gas for a transaction
+    pub fn estimate_gas(&self, tx: TransactionRequest, block: Option<BlockId>) -> Result<U256, EthError>
+
+    // Get accounts controlled by the node
+    pub fn get_accounts(&self) -> Result<Vec<Address>, EthError>
+
+    // Get fee history
+    pub fn get_fee_history(&self, block_count: U256, last_block: BlockNumberOrTag, reward_percentiles: Vec<f64>) -> Result<FeeHistory, EthError>
+
+    // Execute a call transaction
+    pub fn call(&self, tx: TransactionRequest, block: Option<BlockId>) -> Result<Bytes, EthError>
+
+    // Send raw transaction
+    pub fn send_raw_transaction(&self, tx: Bytes) -> Result<TxHash, EthError>
+
+    // Subscribe to logs
+    pub fn subscribe(&self, sub_id: u64, filter: Filter) -> Result<(), EthError>
+
+    // Unsubscribe from logs
+    pub fn unsubscribe(&self, sub_id: u64) -> Result<(), EthError>
+}
+```
+
+homepage.rs
+```
+/// Adds a new icon and/or widget to the Kinode homepage
+pub fn add_to_homepage(
+    label: &str,
+    icon: Option<&str>,
+    path: Option<&str>,
+    widget: Option<&str>
+)
+
+// Struct (imported, not defined in this file)
+struct Request {
+    // Fields not shown in the provided code
+}
+
+// Enum (implied from the JSON structure)
+enum HomepageAction {
+    Add {
+        label: String,
+        icon: Option<String>,
+        path: Option<String>,
+        widget: Option<String>,
+    },
+    // Other variants not shown in the provided code
+}
+```
+
+http.rs
+```
+// Types
+
+pub enum HttpServerRequest {
+    Http(IncomingHttpRequest),
+    WebSocketOpen { path: String, channel_id: u32 },
+    WebSocketPush { channel_id: u32, message_type: WsMessageType },
+    WebSocketClose(u32),
+}
+
+pub struct IncomingHttpRequest {
+    source_socket_addr: Option<String>,
+    method: String,
+    url: String,
+    bound_path: String,
+    headers: HashMap<String, String>,
+    url_params: HashMap<String, String>,
+    query_params: HashMap<String, String>,
+}
+
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+}
+
+pub enum HttpServerAction {
+    Bind { path: String, authenticated: bool, local_only: bool, cache: bool },
+    SecureBind { path: String, cache: bool },
+    Unbind { path: String },
+    WebSocketBind { path: String, authenticated: bool, encrypted: bool, extension: bool },
+    WebSocketSecureBind { path: String, encrypted: bool, extension: bool },
+    WebSocketUnbind { path: String },
+    WebSocketOpen { path: String, channel_id: u32 },
+    WebSocketPush { channel_id: u32, message_type: WsMessageType },
+    WebSocketExtPushOutgoing { channel_id: u32, message_type: WsMessageType, desired_reply_type: MessageType },
+    WebSocketExtPushData { id: u64, kinode_message_type: MessageType, blob: Vec<u8> },
+    WebSocketClose(u32),
+}
+
+pub enum WsMessageType {
+    Text,
+    Binary,
+    Ping,
+    Pong,
+    Close,
+}
+
+pub struct WsRegister {
+    pub auth_token: String,
+    pub target_process: String,
+    pub encrypted: bool,
+}
+
+pub struct WsRegisterResponse {
+    pub channel_id: u32,
+}
+
+pub struct JwtClaims {
+    pub username: String,
+    pub expiration: u64,
+}
+
+pub enum HttpClientAction {
+    Http(OutgoingHttpRequest),
+    WebSocketOpen { url: String, headers: HashMap<String, String>, channel_id: u32 },
+    WebSocketPush { channel_id: u32, message_type: WsMessageType },
+    WebSocketClose { channel_id: u32 },
+}
+
+pub struct OutgoingHttpRequest {
+    pub method: String,
+    pub version: Option<String>,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+}
+
+pub enum HttpClientRequest {
+    WebSocketPush { channel_id: u32, message_type: WsMessageType },
+    WebSocketClose { channel_id: u32 },
+}
+
+pub enum HttpClientResponse {
+    Http(HttpResponse),
+    WebSocketAck,
+}
+
+// Function signatures
+
+// Bind an HTTP path
+pub fn bind_http_path<T: Into<String>>(path: T, authenticated: bool, local_only: bool) -> Result<(), HttpServerError>
+
+// Bind an HTTP path with static content
+pub fn bind_http_static_path<T: Into<String>>(path: T, authenticated: bool, local_only: bool, content_type: Option<String>, content: Vec<u8>) -> Result<(), HttpServerError>
+
+// Unbind an HTTP path
+pub fn unbind_http_path<T: Into<String>>(path: T) -> Result<(), HttpServerError>
+
+// Bind a WebSocket path
+pub fn bind_ws_path<T: Into<String>>(path: T, authenticated: bool, encrypted: bool) -> Result<(), HttpServerError>
+
+// Bind an extension WebSocket path
+pub fn bind_ext_path<T: Into<String>>(path: T) -> Result<(), HttpServerError>
+
+// Unbind a WebSocket path
+pub fn unbind_ws_path<T: Into<String>>(path: T) -> Result<(), HttpServerError>
+
+// Send an HTTP response
+pub fn send_response(status: StatusCode, headers: Option<HashMap<String, String>>, body: Vec<u8>)
+
+// Send an HTTP request
+pub fn send_request(method: Method, url: url::Url, headers: Option<HashMap<String, String>>, timeout: Option<u64>, body: Vec<u8>)
+
+// Send an HTTP request and await response
+pub fn send_request_await_response(method: Method, url: url::Url, headers: Option<HashMap<String, String>>, timeout: u64, body: Vec<u8>) -> Result<Response<Vec<u8>>, HttpClientError>
+
+// Get MIME type for a filename
+pub fn get_mime_type(filename: &str) -> String
+
+// Serve index.html
+pub fn serve_index_html(our: &Address, directory: &str, authenticated: bool, local_only: bool, paths: Vec<&str>) -> anyhow::Result<()>
+
+// Serve static UI files
+pub fn serve_ui(our: &Address, directory: &str, authenticated: bool, local_only: bool, paths: Vec<&str>) -> anyhow::Result<()>
+
+// Handle UI asset request
+pub fn handle_ui_asset_request(our: &Address, directory: &str, path: &str) -> anyhow::Result<()>
+
+// Send WebSocket push
+pub fn send_ws_push(channel_id: u32, message_type: WsMessageType, blob: KiBlob)
+
+// Open WebSocket connection
+pub fn open_ws_connection(url: String, headers: Option<HashMap<String, String>>, channel_id: u32) -> Result<(), HttpClientError>
+
+// Send WebSocket client push
+pub fn send_ws_client_push(channel_id: u32, message_type: WsMessageType, blob: KiBlob)
+
+// Close WebSocket connection
+pub fn close_ws_connection(channel_id: u32) -> Result<(), HttpClientError>
+```
+
+kernel_types.rs
+```
+// Types
+
+type Context = Vec<u8>
+type NodeId = String
+
+struct LazyLoadBlob {
+    mime: Option<String>,
+    bytes: Vec<u8>,
+}
+
+struct Request {
+    inherit: bool,
+    expects_response: Option<u64>,
+    body: Vec<u8>,
+    metadata: Option<String>,
+    capabilities: Vec<Capability>,
+}
+
+struct Response {
+    inherit: bool,
+    body: Vec<u8>,
+    metadata: Option<String>,
+    capabilities: Vec<Capability>,
+}
+
+enum Message {
+    Request(Request),
+    Response((Response, Option<Context>)),
+}
+
+struct Capability {
+    issuer: Address,
+    params: String,
+}
+
+struct SendError {
+    kind: SendErrorKind,
+    target: Address,
+    message: Message,
+    lazy_load_blob: Option<LazyLoadBlob>,
+}
+
+enum SendErrorKind {
+    Offline,
+    Timeout,
+}
+
+enum OnExit {
+    None,
+    Restart,
+    Requests(Vec<(Address, Request, Option<LazyLoadBlob>)>),
+}
+
+enum KernelCommand {
+    // Various commands for kernel operations
+}
+
+enum KernelPrint {
+    ProcessMap,
+    Process(ProcessId),
+    HasCap { on: ProcessId, cap: Capability },
+}
+
+enum KernelResponse {
+    // Various responses to kernel commands
+}
+
+struct PersistedProcess {
+    wasm_bytes_handle: String,
+    on_exit: OnExit,
+    capabilities: HashSet<Capability>,
+    public: bool,
+}
+
+enum StateAction {
+    // Actions for state management
+}
+
+enum StateResponse {
+    // Responses to state actions
+}
+
+enum StateError {
+    // Various error types for state operations
+}
+
+struct Erc721Metadata {
+    // Fields for ERC721 metadata
+}
+
+struct Erc721Properties {
+    // Properties for ERC721 metadata
+}
+
+struct PackageManifestEntry {
+    // Fields for package manifest entries
+}
+
+struct DotScriptsEntry {
+    // Fields for .scripts entries
+}
+
+enum MessageType {
+    Request,
+    Response,
+}
+
+struct KnsUpdate {
+    // Fields for KNS updates
+}
+
+// Function signatures
+
+impl OnExit {
+    fn is_restart(&self) -> bool
+    // Returns true if OnExit is Restart
+}
+
+impl StateError {
+    fn kind(&self) -> &str
+    // Returns the kind of StateError as a string
+}
+
+impl std::fmt::Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result
+    // Formats Message for display
+}
+
+// Conversion functions between WIT and kernel types
+
+fn de_wit_address(wit: wit::Address) -> Address
+fn en_wit_address(address: Address) -> wit::Address
+fn de_wit_request(wit: wit::Request) -> Request
+fn en_wit_request(request: Request) -> wit::Request
+fn de_wit_response(wit: wit::Response) -> Response
+fn en_wit_response(response: Response) -> wit::Response
+fn de_wit_blob(wit: Option<wit::LazyLoadBlob>) -> Option<LazyLoadBlob>
+fn en_wit_blob(load: Option<LazyLoadBlob>) -> Option<wit::LazyLoadBlob>
+fn de_wit_capability(wit: wit::Capability) -> Capability
+fn en_wit_capability(cap: Capability) -> wit::Capability
+fn en_wit_message(message: Message) -> wit::Message
+fn en_wit_send_error(error: SendError) -> wit::SendError
+fn en_wit_send_error_kind(kind: SendErrorKind) -> wit::SendErrorKind
+```
+
+kv.rs
+```
+// Types
+
+struct KvRequest {
+    package_id: PackageId,
+    db: String,
+    action: KvAction,
+}
+
+enum KvAction {
+    Open,
+    RemoveDb,
+    Set { key: Vec<u8>, tx_id: Option<u64> },
+    Delete { key: Vec<u8>, tx_id: Option<u64> },
+    Get { key: Vec<u8> },
+    BeginTx,
+    Commit { tx_id: u64 },
+    Backup,
+}
+
+enum KvResponse {
+    Ok,
+    BeginTx { tx_id: u64 },
+    Get { key: Vec<u8> },
+    Err { error: KvError },
+}
+
+enum KvError {
+    NoDb,
+    KeyNotFound,
+    NoTx,
+    NoCap { error: String },
+    RocksDBError { action: String, error: String },
+    InputError { error: String },
+    IOError { error: String },
+}
+
+struct Kv<K, V> {
+    package_id: PackageId,
+    db: String,
+    timeout: u64,
+    _marker: PhantomData<(K, V)>,
+}
+
+// Function signatures
+
+impl<K: Serialize + DeserializeOwned, V: Serialize + DeserializeOwned> Kv<K, V> {
+    // Get a value from the database
+    fn get(&self, key: &K) -> anyhow::Result<V>
+
+    // Set a value in the database, optionally in a transaction
+    fn set(&self, key: &K, value: &V, tx_id: Option<u64>) -> anyhow::Result<()>
+
+    // Delete a value from the database, optionally in a transaction
+    fn delete(&self, key: &K, tx_id: Option<u64>) -> anyhow::Result<()>
+
+    // Begin a transaction
+    fn begin_tx(&self) -> anyhow::Result<u64>
+
+    // Commit a transaction
+    fn commit_tx(&self, tx_id: u64) -> anyhow::Result<()>
+}
+
+// Open or create a key-value database
+fn open<K: Serialize + DeserializeOwned, V: Serialize + DeserializeOwned>(
+    package_id: PackageId,
+    db: &str,
+    timeout: Option<u64>
+) -> anyhow::Result<Kv<K, V>>
+
+// Remove and delete a key-value database
+fn remove_db(package_id: PackageId, db: &str, timeout: Option<u64>) -> anyhow::Result<()>
+```
+
+lib.rs
+```
+// Types
+
+struct Address(String);
+struct ProcessId { node: Option<String>, package: String, process: String }
+struct Capability { issuer: Address, params: String }
+struct LazyLoadBlob { mime: Option<String>, bytes: Vec<u8> }
+struct Message { /* fields not shown in the code snippet */ }
+struct SendError { kind: SendErrorKind, message: Message, lazy_load_blob: Option<LazyLoadBlob>, context: String }
+enum SendErrorKind { Offline, Timeout }
+struct OnExit { /* fields not shown in the code snippet */ }
+struct PackageId { /* fields not shown in the code snippet */ }
+struct Request { /* fields not shown in the code snippet */ }
+struct Response { /* fields not shown in the code snippet */ }
+
+// Function Signatures
+
+// Initialize the process with the given address
+fn init(our: Address)
+
+// Print to the terminal with maximum verbosity
+fn print_to_terminal(verbosity: u8, message: &str)
+
+// Await the next message sent to this process
+fn await_message() -> Result<Message, SendError>
+
+// Spawn a new process
+fn spawn(
+    name: Option<&str>,
+    wasm_path: &str,
+    on_exit: OnExit,
+    request_capabilities: Vec<Capability>,
+    grant_capabilities: Vec<ProcessId>,
+    public: bool,
+) -> Result<ProcessId, SpawnError>
+
+// Create a blob with a generic type and serializer function
+fn make_blob<T, F>(blob: &T, serializer: F) -> anyhow::Result<LazyLoadBlob>
+where F: Fn(&T) -> anyhow::Result<Vec<u8>>
+
+// Fetch and deserialize the blob of the most recent message
+fn get_typed_blob<T, F>(deserializer: F) -> Option<T>
+where F: Fn(&[u8]) -> anyhow::Result<T>
+
+// Fetch and deserialize the persisted state blob
+fn get_typed_state<T, F>(deserializer: F) -> Option<T>
+where F: Fn(&[u8]) -> anyhow::Result<T>
+
+// Check if we have the capability to message a certain process
+fn can_message(address: &Address) -> bool
+
+// Get a capability from our store
+fn get_capability(our: &Address, params: &str) -> Option<Capability>
+
+// Get the next message body from the message queue
+fn await_next_message_body() -> Result<Vec<u8>, SendError>
+```
+
+net.rs
+```
+// Types
+
+struct Identity {
+    name: NodeId,
+    networking_key: String,
+    ws_routing: Option<(String, u16)>,
+    allowed_routers: Vec<NodeId>,
+}
+
+enum NetAction {
+    ConnectionRequest(NodeId),
+    KnsUpdate(KnsUpdate),
+    KnsBatchUpdate(Vec<KnsUpdate>),
+    GetPeers,
+    GetPeer(String),
+    GetName(String),
+    GetDiagnostics,
+    Sign,
+    Verify { from: Address, signature: Vec<u8> },
+}
+
+enum NetResponse {
+    Accepted(NodeId),
+    Rejected(NodeId),
+    Peers(Vec<Identity>),
+    Peer(Option<Identity>),
+    Name(Option<String>),
+    Diagnostics(String),
+    Signed,
+    Verified(bool),
+}
+
+struct KnsUpdate {
+    name: String,
+    owner: String,
+    node: String,
+    public_key: String,
+    ip: String,
+    port: u16,
+    routers: Vec<String>,
+}
+
+enum DnsDecodeError {
+    Utf8Error(std::string::FromUtf8Error),
+    FormatError,
+}
+
+// Function signatures
+
+// Sign a message
+fn sign<T: Into<Vec<u8>>>(message: T) -> Result<Vec<u8>, SendError>
+
+// Verify a signed message
+fn verify<T: Into<Address>, U: Into<Vec<u8>>, V: Into<Vec<u8>>>(
+    from: T,
+    message: U,
+    signature: V
+) -> Result<bool, SendError>
+
+// Decode DNSwire-formatted node ID
+fn dnswire_decode(wire_format_bytes: &[u8]) -> Result<String, DnsDecodeError>
+```
+
+sqlite.rs
+```
+// Types
+
+struct SqliteRequest {
+    package_id: PackageId,
+    db: String,
+    action: SqliteAction,
+}
+
+enum SqliteAction {
+    Open,
+    RemoveDb,
+    Write { statement: String, tx_id: Option<u64> },
+    Read { query: String },
+    BeginTx,
+    Commit { tx_id: u64 },
+    Backup,
+}
+
+enum SqliteResponse {
+    Ok,
+    Read,
+    BeginTx { tx_id: u64 },
+    Err { error: SqliteError },
+}
+
+enum SqlValue {
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+    Boolean(bool),
+    Null,
+}
+
+enum SqliteError {
+    NoDb,
+    NoTx,
+    NoCap { error: String },
+    UnexpectedResponse,
+    NotAWriteKeyword,
+    NotAReadKeyword,
+    InvalidParameters,
+    IOError { error: String },
+    RusqliteError { error: String },
+    InputError { error: String },
+}
+
+struct Sqlite {
+    package_id: PackageId,
+    db: String,
+    timeout: u64,
+}
+
+// Function signatures
+
+impl Sqlite {
+    // Query database (read-only)
+    fn read(&self, query: String, params: Vec<serde_json::Value>) -> anyhow::Result<Vec<HashMap<String, serde_json::Value>>>
+
+    // Execute a write statement
+    fn write(&self, statement: String, params: Vec<serde_json::Value>, tx_id: Option<u64>) -> anyhow::Result<()>
+
+    // Begin a transaction
+    fn begin_tx(&self) -> anyhow::Result<u64>
+
+    // Commit a transaction
+    fn commit_tx(&self, tx_id: u64) -> anyhow::Result<()>
+}
+
+// Open or create SQLite database
+fn open(package_id: PackageId, db: &str, timeout: Option<u64>) -> anyhow::Result<Sqlite>
+
+// Remove and delete SQLite database
+fn remove_db(package_id: PackageId, db: &str, timeout: Option<u64>) -> anyhow::Result<()>
+```
+
+timer.rs 
+```
+// Enum representing timer actions
+enum TimerAction {
+    Debug,
+    SetTimer(u64),
+}
+
+// Set a timer that returns a Response after the specified duration
+fn set_timer(duration: u64, context: Option<Context>)
+
+// Set a timer and wait for it to resolve, returning the response
+fn set_and_await_timer(duration: u64) -> Result<Message, SendError>
+```
+
+# fibonacci.txt
+
+This is a fibonacci project example.
+
+File: Cargo.toml
+```
+[workspace]
+resolver = "2"
+members = [
+    "fibonacci",
+    "number",
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+```
+
+File: metadata.json
+```
+{
+    "name": "fibonacci",
+    "description": "",
+    "image": "",
+    "properties": {
+        "package_name": "fibonacci",
+        "current_version": "0.1.0",
+        "publisher": "template.os",
+        "mirrors": [],
+        "code_hashes": {
+            "0.1.0": ""
+        },
+        "wit_version": 0,
+        "dependencies": []
+    },
+    "external_url": "",
+    "animation_url": ""
+}
+
+```
+
+File: test/tests.toml
+```
+runtime = { FetchVersion = "latest" }
+# runtime = { RepoPath = "~/git/kinode" }
+runtime_build_release = false
+
+
+[[tests]]
+setup_package_paths = [".."]
+test_packages = [
+    { path = "fibonacci_test", grant_capabilities = ["fibonacci:fibonacci:template.os"] },
+]
+timeout_secs = 5
+fakechain_router = 8545
+
+[[tests.nodes]]
+port = 8080
+home = "home/first"
+fake_node_name = "first.dev"
+runtime_verbosity = 0
+
+```
+
+File: test/fibonacci_test/Cargo.toml
+```
+[workspace]
+resolver = "2"
+members = [
+    "fibonacci_test",
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+```
+
+File: test/fibonacci_test/metadata.json
+```
+{
+    "name": "fibonacci Test",
+    "description": "A test for fibonacci.",
+    "image": "",
+    "properties": {
+        "package_name": "fibonacci_test",
+        "current_version": "0.1.0",
+        "publisher": "template.os",
+        "mirrors": [],
+        "code_hashes": {
+            "0.1.0": ""
+        },
+        "wit_version": 0
+    },
+    "external_url": "",
+    "animation_url": ""
+}
+
+```
+
+File: test/fibonacci_test/fibonacci_test/Cargo.toml
+```
+[package]
+name = "fibonacci_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", rev = "b492f3b" }
+process_macros = { git = "https://github.com/kinode-dao/process_macros", rev = "626e501" }
+rmp-serde = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: test/fibonacci_test/fibonacci_test/src/lib.rs
+```
+use crate::kinode::process::fibonacci::{Request as FibRequest, Response as FibResponse};
+use crate::kinode::process::tester::{Request as TesterRequest, Response as TesterResponse, RunRequest, FailResponse};
+
+use kinode_process_lib::{await_message, call_init, print_to_terminal, Address, ProcessId, Request, Response};
+
+mod tester_lib;
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "fibonacci-test-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [PartialEq, serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
+});
+
+fn test_number(n: u32, address: &Address) -> anyhow::Result<u64> {
+    let response = Request::new()
+        .target(address)
+        .body(FibRequest::Number(n))
+        .send_and_await_response(15)?.unwrap();
+    if response.is_request() { fail!("fibonacci_test"); };
+    let FibResponse::Number(fib_number) = response.body().try_into()? else {
+        fail!("fibonacci_test");
+    };
+    Ok(fib_number)
+}
+
+fn test_numbers(n: u32, n_trials: u32, address: &Address) -> anyhow::Result<u64> {
+    let response = Request::new()
+        .target(address)
+        .body(FibRequest::Numbers((n, n_trials)))
+        .send_and_await_response(15)?.unwrap();
+    if response.is_request() { fail!("fibonacci_test"); };
+    let FibResponse::Numbers((fib_number, _)) = response.body().try_into()? else {
+        fail!("fibonacci_test");
+    };
+    Ok(fib_number)
+}
+
+fn handle_message (our: &Address) -> anyhow::Result<()> {
+    let message = await_message().unwrap();
+
+    if !message.is_request() {
+        unimplemented!();
+    }
+    let source = message.source();
+    if our.node != source.node {
+        return Err(anyhow::anyhow!(
+            "rejecting foreign Message from {:?}",
+            source,
+        ));
+    }
+    let TesterRequest::Run(RunRequest {
+        input_node_names: node_names,
+        ..
+    }) = message.body().try_into()?;
+    print_to_terminal(0, "fibonacci_test: a");
+    assert!(node_names.len() == 1);
+
+    let our_fib_address = Address {
+        node: our.node.clone(),
+        process: ProcessId::new(Some("fibonacci"), "fibonacci", "template.os"),
+    };
+
+    let numbers = vec![0, 1, 2, 5, 10, 20, 30, 47];
+    let expecteds = vec![0, 1, 1, 5, 55, 6_765, 832_040, 2_971_215_073];
+    for (number, expected) in numbers.iter().zip(expecteds.iter()) {
+        let result = test_number(number.clone(), &our_fib_address)?;
+        if &result != expected {
+            fail!("fibonacci_test");
+        }
+    }
+
+    let numbers = vec![0, 1, 2, 5, 10, 20, 30, 47];
+    let expecteds = vec![0, 1, 1, 5, 55, 6_765, 832_040, 2_971_215_073];
+    for (number, expected) in numbers.iter().zip(expecteds.iter()) {
+        let result = test_numbers(number.clone(), 5, &our_fib_address)?;
+        if &result != expected {
+            fail!("fibonacci_test");
+        }
+    }
+
+    Response::new()
+        .body(TesterResponse::Run(Ok(())))
+        .send()
+        .unwrap();
+
+    Ok(())
+}
+
+call_init!(init);
+fn init(our: Address) {
+    print_to_terminal(0, "begin");
+
+    loop {
+        match handle_message(&our) {
+            Ok(()) => {},
+            Err(e) => {
+                print_to_terminal(0, format!("fibonacci_test: error: {e:?}").as_str());
+
+                fail!("fibonacci_test");
+            },
+        };
+    }
+}
+
+```
+
+File: test/fibonacci_test/fibonacci_test/src/tester_lib.rs
+```
+use crate::kinode::process::tester::{
+    Response as TesterResponse, FailResponse,
+};
+
+#[macro_export]
+macro_rules! fail {
+    ($test:expr) => {
+        Response::new()
+            .body(TesterResponse::Run(Err(FailResponse {
+                test: $test.into(),
+                file: file!().into(),
+                line: line!(),
+                column: column!(),
+            })))
+            .send()
+            .unwrap();
+        panic!("")
+    };
+    ($test:expr, $file:expr, $line:expr, $column:expr) => {
+        Response::new()
+            .body(TesterResponse::Run(Err(FailResponse {
+                test: $test.into(),
+                file: $file.into(),
+                line: $line,
+                column: $column,
+            })))
+            .send()
+            .unwrap();
+        panic!("")
+    };
+}
+
+```
+
+File: test/fibonacci_test/api/fibonacci_test:template.os-v0.wit
+```
+world fibonacci-test-template-dot-os-v0 {
+    import fibonacci;
+    import tester;
+    include process-v0;
+}
+
+```
+
+File: test/fibonacci_test/api/tester:sys-v0.wit
+```
+interface tester {
+    variant request {
+        run(run-request),
+    }
+
+    variant response {
+        run(result<_, fail-response>)
+    }
+
+    record run-request {
+        input-node-names: list<string>,
+        test-names: list<string>,
+        test-timeout: u64,
+    }
+
+    record fail-response {
+        test: string,
+        file: string,
+        line: u32,
+        column: u32,
+    }
+}
+
+world tester-sys-v0 {
+    import tester;
+    include process-v0;
+}
+
+```
+
+File: test/fibonacci_test/api/fibonacci:template.os-v0.wit
+```
+interface fibonacci {
+    variant request {
+        number(u32),
+        numbers(tuple<u32, u32>),
+    }
+
+    variant response {
+        number(u64),
+        numbers(tuple<u64, u32>),
+    }
+}
+
+world fibonacci-template-dot-os-v0 {
+    import fibonacci;
+    include process-v0;
+}
+
+```
+
+File: test/fibonacci_test/pkg/manifest.json
+```
+[
+    {
+        "process_name": "fibonacci_test",
+        "process_wasm_path": "/fibonacci_test.wasm",
+        "on_exit": "Restart",
+        "request_networking": false,
+        "request_capabilities": [],
+        "grant_capabilities": [
+            "fibonacci:fibonacci:template.os"
+        ],
+        "public": true
+    }
+]
+
+```
+
+File: number/Cargo.toml
+```
+[package]
+name = "number"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: number/src/lib.rs
+```
+use crate::kinode::process::fibonacci::{Request as FibonacciRequest, Response as FibonacciResponse};
+use kinode_process_lib::{
+    await_next_message_body, call_init, println, Address, Message, Request,
+};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "fibonacci-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+call_init!(init);
+fn init(our: Address) {
+    let Ok(body) = await_next_message_body() else {
+        println!("failed to get args!");
+        return;
+    };
+
+    let number: u32 = String::from_utf8(body)
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or_default();
+
+    let Ok(Ok(Message::Response { body, .. })) =
+        Request::to((our.node(), ("fibonacci", "fibonacci", "template.os")))
+            .body(serde_json::to_vec(&FibonacciRequest::Number(number)).unwrap())
+            .send_and_await_response(5)
+    else {
+        println!("did not receive expected Response from fibonacci:fibonacci:template.os");
+        return;
+    };
+
+    let Ok(FibonacciResponse::Number(_number)) = serde_json::from_slice(&body) else {
+        println!("did not receive expected Ack from fibonacci:fibonacci:template.os");
+        return;
+    };
+
+    // don't need to print the number here since the main process prints it
+}
+
+```
+
+File: api/fibonacci:template.os-v0.wit
+```
+interface fibonacci {
+    variant request {
+        number(u32),
+        numbers(tuple<u32, u32>),
+    }
+
+    variant response {
+        number(u64),
+        numbers(tuple<u64, u32>),
+    }
+}
+
+world fibonacci-template-dot-os-v0 {
+    import fibonacci;
+    include process-v0;
+}
+
+```
+
+File: fibonacci/Cargo.toml
+```
+[package]
+name = "fibonacci"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: fibonacci/src/lib.rs
+```
+use crate::kinode::process::fibonacci::{Request as FibonacciRequest, Response as FibonacciResponse};
+use kinode_process_lib::{await_message, call_init, println, Address, Response};
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "fibonacci-template-dot-os-v0",
+    generate_unused_types: true,
+    additional_derives: [serde::Deserialize, serde::Serialize],
+});
+
+/// calculate the nth Fibonacci number
+/// since we are using u64, the maximum number
+/// we can calculate is the 93rd Fibonacci number
+fn fibonacci(n: u32) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    let mut a = 0;
+    let mut b = 1;
+    let mut sum;
+    for _ in 1..n {
+        sum = a + b;
+        a = b;
+        b = sum;
+    }
+    b
+}
+
+fn handle_message() -> anyhow::Result<()> {
+    let message = await_message()?;
+
+    if !message.is_request() {
+        return Err(anyhow::anyhow!("expected a request"));
+    }
+
+    match serde_json::from_slice(message.body())? {
+        FibonacciRequest::Number(number) => {
+            let start = std::time::Instant::now();
+            let result = fibonacci(number);
+            let duration = start.elapsed();
+            println!(
+                "fibonacci({}) = {}; {}ns",
+                number,
+                result,
+                duration.as_nanos(),
+            );
+            Response::new()
+                .body(serde_json::to_vec(&FibonacciResponse::Number(result)).unwrap())
+                .send()
+                .unwrap();
+        }
+        FibonacciRequest::Numbers((number, number_trials)) => {
+            let mut durations = Vec::new();
+            for _ in 0..number_trials {
+                let start = std::time::Instant::now();
+                let _result = fibonacci(number);
+                let duration = start.elapsed();
+                durations.push(duration);
+            }
+            let result = fibonacci(number);
+            let mean =
+                durations.iter().fold(0, |sum, item| sum + item.as_nanos()) / number_trials as u128;
+            let absolute_deviation = durations.iter().fold(0, |ad, item| {
+                let trial = item.as_nanos();
+                ad + if mean >= trial {
+                    mean - trial
+                } else {
+                    trial - mean
+                }
+            }) / number_trials as u128;
+            println!(
+                "fibonacci({}) = {}; {}±{}ns averaged over {} trials",
+                number, result, mean, absolute_deviation, number_trials,
+            );
+            Response::new()
+                .body(
+                    serde_json::to_vec(&FibonacciResponse::Numbers((result, number_trials)))
+                        .unwrap(),
+                )
+                .send()
+                .unwrap();
+        }
+    }
+    Ok(())
+}
+
+call_init!(init);
+fn init(_our: Address) {
+    println!("begin");
+
+    loop {
+        match handle_message() {
+            Ok(()) => {}
+            Err(e) => {
+                println!("error: {:?}", e);
+            }
+        };
+    }
+}
+
+```
+
+File: pkg/scripts.json
+```
+{
+    "number.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": false,
+        "request_capabilities": [
+            "fibonacci:fibonacci:template.os"
+        ],
+        "grant_capabilities": [
+            "fibonacci:fibonacci:template.os"
+        ]
+    }
+}
+
+```
+
+File: pkg/manifest.json
+```
+[
+    {
+        "process_name": "fibonacci",
+        "process_wasm_path": "/fibonacci.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys"
+        ],
+        "grant_capabilities": [],
+        "public": true
+    }
+]
+
+```
+
+
+# graffitech.txt
+
+This is a library using websockets to draw on a canvas via your kinode.
+
+
+File: canvas/Cargo.toml
+```
+[package]
+name = "canvas"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bincode = "1.3.3"
+graffitech_lib = { path = "../lib" }
+js-sys = "0.3.69"
+serde = "1.0"
+serde_json = "1.0"
+wasm-bindgen = "0.2.92"
+wasm-bindgen-futures = "0.4.42"
+
+[dependencies.web-sys]
+version = "0.3.4"
+features = [
+  'BinaryType',
+  'Blob',
+  'CanvasRenderingContext2d',
+  'CssStyleDeclaration',
+  'Document',
+  'Element',
+  'ErrorEvent',
+  'EventTarget',
+  'FileReader',
+  'Headers',
+  'HtmlCanvasElement',
+  'HtmlElement',
+  'Location',
+  'MessageEvent',
+  'MouseEvent',
+  'Node',
+  'ProgressEvent',
+  'Request',
+  'RequestInit',
+  'RequestMode',
+  'Response',
+  'WebSocket',
+  'Window',
+]
+```
+
+File: canvas/src/lib.rs
+```
+use std::cell::Cell;
+use std::rc::Rc;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{
+    window, ErrorEvent, MessageEvent, Request, RequestInit, RequestMode, Response, WebSocket,
+};
+
+type CanvasContext = Rc<web_sys::CanvasRenderingContext2d>;
+
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+#[wasm_bindgen(start)]
+async fn start() -> Result<(), JsValue> {
+    console_log!("hello from wasm");
+
+    let my_color = http_get("color").await?;
+
+    let ws = connect_to_node()?;
+    let (canvas, canvas_context) = make_canvas()?;
+
+    enable_draw(&ws, my_color, &canvas, canvas_context.clone())?;
+    enable_recv(&ws, canvas_context.clone())?;
+
+    Ok(())
+}
+
+async fn http_get(path: &str) -> Result<JsValue, JsValue> {
+    let mut opts = RequestInit::new();
+    opts.method("GET");
+    opts.mode(RequestMode::Cors);
+
+    let url = format!("/{}/{}", graffitech_lib::APP_NAME, path);
+
+    let request = Request::new_with_str_and_init(&url, &opts)?;
+
+    let window = web_sys::window().unwrap();
+    let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
+
+    let resp: Response = resp_value.dyn_into().unwrap();
+    let json = JsFuture::from(resp.json()?).await?;
+    Ok(json)
+}
+
+/// put a canvas on the page and return drawable context
+fn make_canvas() -> Result<(web_sys::HtmlCanvasElement, CanvasContext), JsValue> {
+    let window = window().unwrap();
+
+    // produce a canvas element, all of which our drawing will be done on
+    let document = window.document().unwrap();
+    let canvas = document
+        .create_element("canvas")?
+        .dyn_into::<web_sys::HtmlCanvasElement>()?;
+    document.body().unwrap().append_child(&canvas)?;
+    canvas.set_width(50);
+    canvas.set_height(50);
+    canvas
+        .style()
+        .set_property("image-rendering", "pixelated")?;
+    canvas.style().set_property("width", "500px")?;
+    canvas.style().set_property("height", "500px")?;
+    canvas.style().set_property("margin", "20px auto")?;
+    canvas.style().set_property("display", "block")?;
+    canvas.style().set_property("border", "1px solid black")?;
+    canvas.style().set_property("border-radius", "10px")?;
+
+    // get the 2d context for the canvas so we can draw on it
+    let context = canvas
+        .get_context("2d")?
+        .unwrap()
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+    Ok((canvas, Rc::new(context)))
+}
+
+/// open a WebSocket connection to the node
+fn connect_to_node() -> Result<WebSocket, JsValue> {
+    let window = window().unwrap();
+
+    let protocol = if window.location().protocol().unwrap() == "https:" {
+        "wss://"
+    } else {
+        "ws://"
+    };
+    let ws = WebSocket::new(&format!(
+        "{}{}/{}/ws",
+        protocol,
+        window.location().host().unwrap(),
+        graffitech_lib::APP_NAME
+    ))?;
+
+    // For small binary messages, like CBOR, Arraybuffer is more efficient than Blob handling
+    ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+
+    Ok(ws)
+}
+
+/// create handlers for drawing events on the canvas
+fn enable_draw(
+    ws: &WebSocket,
+    color: JsValue,
+    canvas: &web_sys::HtmlCanvasElement,
+    context: CanvasContext,
+) -> Result<(), JsValue> {
+    // keep track of whether the mouse is pressed
+    let pressed = Rc::new(Cell::new(false));
+
+    // set the line width and color
+    context.set_line_width(2.0);
+
+    context.set_stroke_style(&color);
+    context.set_fill_style(&color);
+
+    // handle mouse press events
+    {
+        let pressed = pressed.clone();
+        let closure = Closure::<dyn FnMut(_)>::new(move |_event: web_sys::MouseEvent| {
+            pressed.set(true);
+        });
+        canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // handle mouse move events if the mouse is pressed
+    {
+        let context = context.clone();
+        let pressed = pressed.clone();
+        let ws = ws.clone();
+        let closure = Closure::<dyn FnMut(_)>::new(move |event: web_sys::MouseEvent| {
+            if pressed.get() {
+                let x = event.offset_x() as f64 / 10.0;
+                let y = event.offset_y() as f64 / 10.0;
+
+                // context.line_to(x, y);
+                // context.stroke();
+                // context.begin_path();
+                // context.move_to(x, y);
+                context.fill_rect(x, y, 1.0, 1.0);
+                let message = graffitech_lib::CanvasMessage {
+                    x,
+                    y,
+                    color: color.as_string().unwrap_or_default(),
+                };
+                // console_log!("sending message: {}", message);
+                let message_bytes: Vec<u8> = serde_json::to_vec(&message).unwrap();
+                let uint8_array = js_sys::Uint8Array::from(&message_bytes[..]);
+                ws.send_with_array_buffer(&uint8_array.buffer()).unwrap();
+            }
+        });
+        canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // handle mouse release events
+    {
+        let closure = Closure::<dyn FnMut(_)>::new(move |_event: web_sys::MouseEvent| {
+            pressed.set(false);
+        });
+        canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    Ok(())
+}
+
+/// create handlers for receiving websocket messages and drawing on the canvas
+fn enable_recv(ws: &WebSocket, context: CanvasContext) -> Result<(), JsValue> {
+    // create callback
+    let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        // console_log!("message event, received: {:?}", e.data());
+        if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
+            let array = js_sys::Uint8Array::new(&abuf);
+            let message =
+                serde_json::from_slice::<graffitech_lib::CanvasMessage>(&array.to_vec()).unwrap();
+            console_log!("received message: {}", message);
+            // draw the received message
+            context.set_fill_style(&message.color.into());
+            context.fill_rect(message.x, message.y, 1.0, 1.0);
+            // context.set_stroke_style(&message.color.into());
+            // context.line_to(message.x, message.y);
+            // context.stroke();
+            // context.begin_path();
+            // context.move_to(message.x, message.y);
+        }
+    });
+
+    // set message event handler on WebSocket
+    ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+    onmessage_callback.forget();
+
+    let onerror_callback = Closure::<dyn FnMut(_)>::new(move |e: ErrorEvent| {
+        console_log!("error event: {:?}", e);
+    });
+    ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
+    onerror_callback.forget();
+
+    Ok(())
+}
+
+```
+
+File: graffitech/Cargo.toml
+```
+[workspace]
+resolver = "2"
+members = [
+    "graffitech",
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+```
+
+File: graffitech/metadata.json
+```
+{
+    "name": "graffi.tech",
+    "description": "Permissionless Art",
+    "image": "",
+    "properties": {
+        "package_name": "graffitech",
+        "current_version": "0.1.0",
+        "publisher": "mothu.eth",
+        "mirrors": [],
+        "code_hashes": {
+            "0.1.0": ""
+        }
+    },
+    "external_url": "",
+    "animation_url": ""
+}
+```
+
+File: graffitech/graffitech/Cargo.toml
+```
+[package]
+name = "graffitech"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+automerge = "0.5.9"
+autosurgeon = "0.8.3"
+bincode = "1.3.3"
+graffitech_lib = { path = "../../lib" }
+hex_color = "3.0.0"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.7.1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: graffitech/graffitech/wit/kinode.wit
+```
+package kinode:process@0.7.0;
+
+interface standard {
+    //
+    // System types:
+    //
+
+    // JSON is passed over WASM boundary as a string.
+    type json = string;
+
+    type node-id = string;
+
+    // Context, like a message body, is a protocol-defined serialized byte
+    // array. It is used when building a Request to save information that
+    // will not be part of a Response, in order to more easily handle
+    // ("contextualize") that Response.
+    type context = list<u8>;
+
+    record process-id {
+        process-name: string,
+        package-name: string,
+        publisher-node: node-id,
+    }
+
+    record address {
+        node: node-id,
+        process: process-id,
+    }
+
+    record lazy-load-blob {
+        mime: option<string>,
+        bytes: list<u8>,
+    }
+
+    record request {
+        // set in order to inherit lazy-load-blob from parent message, and if
+        // expects-response is none, direct response to source of parent.
+        // also carries forward certain aspects of parent message in kernel,
+        // see documentation for formal spec and examples.
+        inherit: bool,
+        // if some, request expects a response in the given number of seconds
+        expects-response: option<u64>,
+        body: list<u8>,
+        metadata: option<json>,
+        capabilities: list<capability>,
+        // to grab lazy-load-blob, use get_blob()
+    }
+
+    record response {
+        inherit: bool,
+        body: list<u8>,
+        metadata: option<json>,
+        capabilities: list<capability>,
+        // to grab lazy-load-blob, use get_blob()
+    }
+
+    // A message can be a request or a response. within a response, there is
+    // a result which surfaces any error that happened because of a request.
+    // A successful response will contain the context of the request it
+    // matches, if any was set.
+    variant message {
+        request(request),
+        response(tuple<response, option<context>>),
+    }
+
+    record capability {
+        issuer: address,
+        params: json,
+    }
+
+    // On-exit is a setting that determines what happens when a process
+    // panics, completes, or otherwise "ends". NOTE: requests should have
+    // expects-response set to false, will always be set to that by kernel.
+    variant on-exit {
+        none,
+        restart,
+        requests(list<tuple<address, request, option<lazy-load-blob>>>),
+    }
+
+    // Network errors come from trying to send a message to another node.
+    // A message can fail by timing out, or by the node being entirely
+    // unreachable (offline). In either case, the message is not delivered
+    // and the process that sent it receives that message along with any
+    // assigned context and/or lazy-load-blob, and is free to handle it as it
+    // sees fit. Note that if the message is a response, the process can
+    // issue a response again, and it will be directed to the same (remote)
+    // request as the original.
+    record send-error {
+        kind: send-error-kind,
+        message: message,
+        lazy-load-blob: option<lazy-load-blob>,
+    }
+
+    enum send-error-kind {
+        offline,
+        timeout,
+    }
+
+    enum spawn-error {
+        name-taken,
+        no-file-at-path,
+        // TODO more here?
+    }
+
+    //
+    // System utils:
+    //
+
+    print-to-terminal: func(verbosity: u8, message: string);
+
+    //
+    // Process management:
+    //
+
+    set-on-exit: func(on-exit: on-exit);
+
+    get-on-exit: func() -> on-exit;
+
+    get-state: func() -> option<list<u8>>;
+
+    set-state: func(bytes: list<u8>);
+
+    clear-state: func();
+
+    spawn: func(
+        name: option<string>,
+        wasm-path: string, // must be located within package's drive
+        on-exit: on-exit,
+        request-capabilities: list<capability>,
+        // note that we are restricting granting to just messaging the
+        // newly spawned process
+        grant-capabilities: list<process-id>,
+        public: bool
+    ) -> result<process-id, spawn-error>;
+
+    //
+    // Capabilities management:
+    //
+
+    // Saves the capabilities to persisted process state.
+    save-capabilities: func(caps: list<capability>);
+
+    // Deletes the capabilities from persisted process state.
+    drop-capabilities: func(caps: list<capability>);
+
+    // Gets all capabilities from persisted process state.
+    our-capabilities: func() -> list<capability>;
+
+    //
+    // Message I/O:
+    //
+
+    // Ingest next message when it arrives along with its source.
+    // Almost all long-running processes will call this in a loop.
+    receive: func() ->
+        result<tuple<address, message>, tuple<send-error, option<context>>>;
+
+    // Gets lazy-load-blob, if any, of the message we most recently received.
+    get-blob: func() -> option<lazy-load-blob>;
+
+    // Send message(s) to target(s).
+    send-request: func(
+        target: address,
+        request: request,
+        context: option<context>,
+        lazy-load-blob: option<lazy-load-blob>
+    );
+
+    send-requests: func(
+        requests: list<tuple<address,
+                             request,
+                             option<context>,
+                             option<lazy-load-blob>>>
+    );
+
+    send-response: func(
+        response: response,
+        lazy-load-blob: option<lazy-load-blob>
+    );
+
+    // Send a single request, then block (internally) until its response. The
+    // type returned is Message but will always contain Response.
+    send-and-await-response: func(
+        target: address,
+        request: request,
+        lazy-load-blob: option<lazy-load-blob>
+    ) -> result<tuple<address, message>, send-error>;
+}
+
+world lib {
+    import standard;
+}
+
+world process {
+    include lib;
+
+    export init: func(our: string);
+}
+
+```
+
+File: graffitech/graffitech/src/frontend.rs
+```
+use graffitech_lib::{CanvasMessage, GraffiRequest};
+use kinode_process_lib::{
+    http,
+    http::{HttpServerRequest, IncomingHttpRequest, Method, StatusCode},
+    println, Address, Message, Request,
+};
+use std::collections::HashSet;
+
+pub fn serve(our: &Address) {
+    http::serve_ui(our, "dist", true, false, vec!["/"]).expect("couldn't serve UI");
+    http::bind_http_path("/color", true, false).expect("couldn't bind HTTP state path");
+    // http::bind_http_path("/post", true, false).expect("couldn't bind HTTP post path");
+    http::bind_ws_path("/ws", true, false).expect("couldn't bind WS updates path");
+
+    // add icon to homepage
+    kinode_process_lib::homepage::add_to_homepage("Graffi.tech", None, Some("/"), None);
+}
+
+pub fn send_ws_updates(value: CanvasMessage, ws_channels: &HashSet<u32>) {
+    if ws_channels.is_empty() {
+        return;
+    }
+    let bytes = serde_json::to_vec(&value).unwrap();
+    for channel_id in ws_channels.iter() {
+        http::send_ws_push(
+            *channel_id,
+            http::WsMessageType::Binary,
+            kinode_process_lib::LazyLoadBlob {
+                mime: Some("application/json".to_string()),
+                bytes: bytes.clone(),
+            },
+        );
+    }
+}
+
+pub fn handle_http_request(
+    our: &Address,
+    message: Message,
+    ws_channels: &mut HashSet<u32>,
+    friends: &mut HashSet<Address>,
+) -> anyhow::Result<()> {
+    if !message.is_request() {
+        return Ok(());
+    }
+    let Ok(req) = serde_json::from_slice::<HttpServerRequest>(message.body()) else {
+        return Err(anyhow::anyhow!("failed to parse incoming http request"));
+    };
+
+    match req {
+        HttpServerRequest::Http(req) => match serve_http_paths(our, req, ws_channels) {
+            Ok((status_code, body)) => http::send_response(
+                status_code,
+                Some(std::collections::HashMap::from([(
+                    String::from("Content-Type"),
+                    String::from("application/json"),
+                )])),
+                body,
+            ),
+            Err(e) => {
+                http::send_response(StatusCode::INTERNAL_SERVER_ERROR, None, vec![]);
+                return Err(e);
+            }
+        },
+        HttpServerRequest::WebSocketOpen { channel_id, .. } => {
+            // save channel id for pushing
+            ws_channels.insert(channel_id);
+        }
+        HttpServerRequest::WebSocketClose(channel_id) => {
+            // remove channel id
+            ws_channels.remove(&channel_id);
+        }
+        HttpServerRequest::WebSocketPush {
+            message_type,
+            channel_id,
+        } => {
+            match message_type {
+                http::WsMessageType::Close => {
+                    // remove channel id
+                    ws_channels.remove(&channel_id);
+                }
+                _ => {
+                    let blob = kinode_process_lib::get_blob();
+                    if let Some(blob) = blob {
+                        let message: CanvasMessage = serde_json::from_slice(&blob.bytes)?;
+                        println!("WS message received: {}", message);
+                        // forward message to friends
+                        let body = serde_json::to_vec(&GraffiRequest::Draw(message))?;
+                        for friend in friends.iter() {
+                            Request::to(friend).body(body.clone()).send()?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn serve_http_paths(
+    _our: &Address,
+    req: IncomingHttpRequest,
+    _ws_channels: &mut HashSet<u32>,
+) -> anyhow::Result<(StatusCode, Vec<u8>)> {
+    let method = req.method()?;
+    // strips first section of path, which is the process name
+    let bound_path = req.path()?;
+    let _url_params = req.url_params();
+
+    match bound_path.as_str() {
+        "/color" => match method {
+            Method::GET => {
+                let color = "red";
+                Ok((
+                    StatusCode::OK,
+                    serde_json::to_vec(&serde_json::json!(color))?,
+                ))
+            }
+            _ => Ok((StatusCode::METHOD_NOT_ALLOWED, vec![])),
+        },
+        _ => Ok((StatusCode::NOT_FOUND, vec![])),
+    }
+}
+
+```
+
+File: graffitech/graffitech/src/lib.rs
+```
+#![feature(let_chains)]
+use graffitech_lib::{GraffiRequest, GraffiResponse};
+use kinode_process_lib::{await_message, call_init, println, Address, Response};
+use std::collections::HashSet;
+
+mod frontend;
+mod state;
+
+wit_bindgen::generate!({
+    path: "wit",
+    world: "process",
+});
+
+call_init!(init);
+fn init(our: Address) {
+    let mut ws_channels: HashSet<u32> = HashSet::new();
+    let mut friends: HashSet<Address> = HashSet::new();
+    frontend::serve(&our);
+
+    loop {
+        handle_message(&our, &mut ws_channels, &mut friends)
+            .map_err(|e| println!("error: {:?}", e))
+            .ok();
+    }
+}
+
+fn handle_message(
+    our: &Address,
+    ws_channels: &mut HashSet<u32>,
+    friends: &mut HashSet<Address>,
+) -> anyhow::Result<()> {
+    match await_message() {
+        Ok(message) => {
+            if message.is_local(our) {
+                if message.is_process("http_server:distro:sys") {
+                    // handle http requests
+                    frontend::handle_http_request(our, message, ws_channels, friends)
+                } else {
+                    Ok(())
+                }
+            } else {
+                // handle remote requests
+                if message.is_request() {
+                    let req = serde_json::from_slice::<GraffiRequest>(&message.body())?;
+                    match req {
+                        GraffiRequest::AddPlayer(address) => {
+                            friends.insert(address.parse().unwrap());
+                            println!("Added player: {}", address);
+                            Response::new()
+                                .body(serde_json::to_vec(&GraffiResponse::Cool)?)
+                                .send()
+                                .unwrap();
+                        }
+                        GraffiRequest::RemovePlayer(address) => {
+                            friends.remove(&address.parse().unwrap());
+                            println!("Removed player: {}", address);
+                            Response::new()
+                                .body(serde_json::to_vec(&GraffiResponse::Cool)?)
+                                .send()
+                                .unwrap();
+                        }
+                        GraffiRequest::Draw(draw) => {
+                            println!("Remote draw received: {}", draw);
+                            frontend::send_ws_updates(draw, ws_channels)
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        Err(_send_error) => Ok(()),
+    }
+}
+
+```
+
+File: graffitech/graffitech/src/state.rs
+```
+use hex_color::HexColor;
+use kinode_process_lib::NodeId;
+use std::collections::HashMap;
+
+pub struct World {
+    pub drawings: HashMap<NodeId, Drawing>,
+}
+
+pub type Drawing = Vec<Point>;
+
+pub struct Point {
+    pub x: i64,
+    pub y: i64,
+    pub author: NodeId,
+    color: HexColor,
+}
+
+mod autosurgeon_address {
+    use autosurgeon::{Hydrate, HydrateError, Prop, ReadDoc, Reconciler};
+    use kinode_process_lib::Address;
+    pub(super) fn hydrate<'a, D: ReadDoc>(
+        doc: &D,
+        obj: &automerge::ObjId,
+        prop: Prop<'a>,
+    ) -> Result<Address, HydrateError> {
+        let inner = String::hydrate(doc, obj, prop)?;
+        inner.parse().map_err(|e| {
+            HydrateError::unexpected(
+                "a valid address",
+                format!("an address which failed to parse due to {}", e),
+            )
+        })
+    }
+
+    pub(super) fn reconcile<R: Reconciler>(
+        path: &Address,
+        mut reconciler: R,
+    ) -> Result<(), R::Error> {
+        reconciler.str(path.to_string())
+    }
+}
+
+```
+
+File: graffitech/pkg/scripts.json
+```
+{}
+```
+
+File: graffitech/pkg/manifest.json
+```
+[
+    {
+        "process_name": "graffitech",
+        "process_wasm_path": "/graffitech.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "homepage:homepage:sys",
+            "http_server:distro:sys",
+            "vfs:distro:sys"
+        ],
+        "grant_capabilities": [
+            "homepage:homepage:sys",
+            "http_server:distro:sys",
+            "vfs:distro:sys"
+        ],
+        "public": true
+    }
+]
+```
+
+File: lib/Cargo.toml
+```
+[package]
+name = "graffitech_lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+hex_color = "3.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+```
+
+File: lib/src/lib.rs
+```
+use serde::{Deserialize, Serialize};
+
+pub const APP_NAME: &str = "graffitech:graffitech:mothu.eth";
+
+#[derive(Serialize, Deserialize)]
+pub struct CanvasMessage {
+    pub x: f64,
+    pub y: f64,
+    pub color: String,
+}
+
+impl std::fmt::Display for CanvasMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum GraffiRequest {
+    AddPlayer(String),
+    RemovePlayer(String),
+    Draw(CanvasMessage),
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum GraffiResponse {
+    Cool,
+}
+
+```
+
+
+# kit_commands.txt
+
+Some context on using the `kit` command for development: 
+
+```
+kit --help
+Development toolkit for Kinode
+
+Usage: kit <COMMAND>
+
+Commands:
+  boot-fake-node       Boot a fake node for development [aliases: f]
+  boot-real-node       Boot a real node [aliases: e]
+  build                Build a Kinode package [aliases: b]
+  build-start-package  Build and start a Kinode package [aliases: bs]
+  chain                Start a local chain for development [aliases: c]
+  connect              Connect (or disconnect) a ssh tunnel to a remote server
+  dev-ui               Start the web UI development server with hot reloading (same as `cd ui && npm i && npm run dev`) [aliases: d]
+  inject-message       Inject a message to a running Kinode [aliases: i]
+  new                  Create a Kinode template package [aliases: n]
+  remove-package       Remove a running package from a node [aliases: r]
+  reset-cache          Reset kit cache (Kinode core binaries, logs, etc.)
+  run-tests            Run Kinode tests [aliases: t]
+  setup                Fetch & setup kit dependencies
+  start-package        Start a built Kinode process [aliases: s]
+  update               Fetch the most recent version of kit
+  view-api             Fetch the list of APIs or a specific API [aliases: v]
+  help                 Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --version  Print version
+  -h, --help     Print help
+```
+
+```
+kit build --help
+Build a Kinode package
+
+Usage: kit build [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]  The package directory to build [default: /Users/fresh/Documents/uqbar/file_crawler]
+
+Options:
+      --no-ui                If set, do NOT build the web UI for the process; no-op if passed with UI_ONLY
+      --ui-only              If set, build ONLY the web UI for the process; no-op if passed with NO_UI
+  -s, --skip-deps-check      If set, do not check for dependencies
+      --features <FEATURES>  Pass these comma-delimited feature flags to Rust cargo builds
+  -p, --port <NODE_PORT>     Node port: for use on localhost (overridden by URL)
+  -u, --url <URL>            Node URL (overrides NODE_PORT)
+  -w, --world <WORLD>        Fallback WIT world name
+  -v, --verbose              If set, output stdout and stderr
+  -h, --help                 Print help
+```
+
+```
+kit new --help
+Create a Kinode template package
+
+Usage: kit new [OPTIONS] <DIR>
+
+Arguments:
+  <DIR>  Path to create template directory at
+
+Options:
+  -a, --package <PACKAGE>      Name of the package [default: DIR]
+  -u, --publisher <PUBLISHER>  Name of the publisher [default: template.os]
+  -l, --language <LANGUAGE>    Programming language of the template [default: rust] [possible values: rust, python, javascript]
+  -t, --template <TEMPLATE>    Template to create [default: chat] [possible values: chat, echo, fibonacci, file_transfer]
+      --ui                     If set, use the template with UI
+  -h, --help                   Print help
+```
+
+
+# command_center.txt
+
+File: Cargo.toml
+```
+[workspace]
+resolver = "2"
+members = [
+    "command_center",
+    "ai_chatbot_demo",
+    "storage", 
+    "vectorbase"
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+```
+
+File: metadata.json
+```
+{
+    "name": "Command Center",
+    "description": "Api Aggregator",
+    "image": "https://i.imgur.com/B3c5h4k.png",
+    "properties": {
+        "package_name": "command_center",
+        "current_version": "0.1.5",
+        "publisher": "appattacc.os",
+        "mirrors": [
+            "appattacc.os"
+        ],
+        "code_hashes": {
+            "0.1.5": "cee6d91e9f8702e07bbf0e942e4b3dc037563d0f2dd5fa9c4088b2c81e336b5b"
+        }, 
+        "wit_version": 0,
+        "dependencies": []
+    },
+    "external_url": "https://github.com/kinode-dao/command_center",
+    "animation_url": ""
+}
+
+```
+
+File: storage/Cargo.toml
+```
+[package]
+name = "storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+chrono = "0.4"
+storage_interface = { git = "https://github.com/kinode-dao/command_center/", branch = "storage_interface" }
+
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: storage/src/lib.rs
+```
+use kinode_process_lib::{await_message, call_init, get_blob, http, println, Address, Message, Response};
+use std::collections::HashMap;
+
+use storage_interface::GlobalTweetMap;
+
+mod structs;
+use structs::*;
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "process-v0",
+});
+
+pub fn default_headers() -> HashMap<String, String> {
+    HashMap::from([
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("Access-Control-Allow-Origin".to_string(), "*".to_string()),
+        (
+            "Access-Control-Allow-Headers".to_string(),
+            "Content-Type".to_string(),
+        ),
+        (
+            "Access-Control-Allow-Methods".to_string(),
+            "GET, POST, OPTIONS".to_string(),
+        ),
+    ])
+}
+
+fn handle_message(our: &Address, state: &mut Option<State>) -> anyhow::Result<()> {
+    let message = await_message()?;
+    if message.source().node != our.node {
+        return Ok(());
+    }
+    match message.source().process.to_string().as_str() {
+        "http_server:distro:sys" | "http_client:distro:sys" => {
+            handle_http_message(&our, &message, state)
+        }
+        _ => handle_internal_message(state, &message),
+    }
+}
+
+fn handle_internal_message(state: &mut Option<State>, message: &Message) -> anyhow::Result<()> {
+    match message {
+        Message::Request { ref body, .. } => handle_internal_request(state, body),
+        Message::Response { .. } => Ok(()),
+    }
+}
+
+fn handle_internal_request(state: &mut Option<State>, body: &[u8]) -> anyhow::Result<()> {
+    let request = serde_json::from_slice::<storage_interface::Request>(body)?;
+    match request {
+        storage_interface::Request::GetTweets {
+            start_time,
+            end_time,
+        } => get_tweets(state, start_time, end_time),
+    }
+}
+
+fn get_tweets(state: &mut Option<State>, start_time: i64, end_time: i64) -> anyhow::Result<()> {
+    let filtered_tweets: GlobalTweetMap = state.as_ref().map_or_else(
+        || HashMap::new(),
+        |s| {
+            s.tweets
+                .iter()
+                .filter(|(_, tweet)| {
+                    tweet.date.unwrap_or(0) > start_time && tweet.date.unwrap_or(0) < end_time
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<GlobalTweetMap>()
+        },
+    );
+    let _ = Response::new()
+        .body(serde_json::to_vec(
+            &storage_interface::Response::GetTweets {
+                tweets: filtered_tweets,
+            },
+        )?)
+        .send();
+    Ok(())
+}
+
+fn handle_http_message(
+    our: &Address,
+    message: &Message,
+    state: &mut Option<State>,
+) -> anyhow::Result<()> {
+    match message {
+        Message::Request { ref body, .. } => handle_http_request(our, state, body),
+        Message::Response { .. } => Ok(()),
+    }
+}
+
+fn handle_http_request(
+    our: &Address,
+    state: &mut Option<State>,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let http_request = http::HttpServerRequest::from_bytes(body)?
+        .request()
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse http request"))?;
+    match http_request.method().ok() {
+        Some(http::Method::OPTIONS) => {
+            let _ = http::send_response(http::StatusCode::OK, Some(default_headers()), Vec::new());
+            return Ok(());
+        }
+        Some(http::Method::POST) => {
+            let path = http_request.path()?;
+            let bytes = get_blob()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get blob"))?
+                .bytes;
+            match path.as_str() {
+                "/populate" => populate_tweets(our, state, &bytes),
+                _ => Ok(()),
+            }
+        }
+        _ => Err(anyhow::anyhow!("Method not allowed")),
+    }
+}
+
+fn populate_tweets(our: &Address, state: &mut Option<State>, bytes: &[u8]) -> anyhow::Result<()> {
+    let tweets = serde_json::from_slice::<GlobalTweetMap>(bytes)?;
+    if let Some(state) = state {
+        for (key, value) in tweets {
+            if !state.tweets.contains_key(&key) {
+                println!("Inserted tweet {}", key.clone());
+                state.tweets.insert(key, value);
+            }
+        }
+        state.save();
+    } else {
+        let inner_state = State {
+            our: our.clone(),
+            tweets: tweets.clone(),
+        };
+        println!("Saved {} tweets", inner_state.tweets.len());
+        inner_state.save();
+        *state = Some(inner_state);
+    }
+
+    http::send_response(
+        http::StatusCode::OK,
+        Some(default_headers()),
+        b"{\"message\": \"success\"}".to_vec(),
+    );
+    Ok(())
+}
+
+call_init!(init);
+fn init(our: Address) {
+    println!("Begin: {:?}", our.process.process_name);
+
+    if let Err(e) = http::serve_index_html(&our, "ui", false, true, vec!["/", "/populate"]) {
+        panic!("Error binding https paths: {:?}", e);
+    }
+
+    let mut state = State::fetch();
+    loop {
+        match handle_message(&our, &mut state) {
+            Ok(_) => {}
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+}
+
+
+```
+
+File: storage/src/structs.rs
+```
+use kinode_process_lib::{get_state, set_state, Address};
+use serde::{Deserialize, Serialize};
+use storage_interface::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct State {
+    pub our: Address,
+    pub tweets: GlobalTweetMap,
+}
+
+impl State {
+    pub fn fetch() -> Option<State> {
+        if let Some(state_bytes) = get_state() {
+            bincode::deserialize(&state_bytes).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&self) {
+        let serialized_state = bincode::serialize(self).expect("Failed to serialize state");
+        set_state(&serialized_state);
+    }
+}
+
+```
+
+File: ai_chatbot_demo/Cargo.toml
+```
+[package]
+name = "ai_chatbot_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+llm_interface = { git = "https://github.com/kinode-dao/llm", branch = "interface"}
+stt_interface = { git = "https://github.com/kinode-dao/stt", branch = "interface"}
+telegram_interface = { git = "https://github.com/kinode-dao/telegram-bot/", branch = "zen/interface" }
+# TODO: We probably shouldn't have frankenstein here, the telegram_interface (or the wit) should contain all the traits required.
+frankenstein = { version = "0.30", default-features = false, features = ["telegram-trait"] } 
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: ai_chatbot_demo/src/lib.rs
+```
+use kinode_process_lib::{
+    await_message, call_init, Address, Message, get_blob, Request, /*println */
+};
+use frankenstein::{Message as TgMessage, UpdateContent, ChatId, SendMessageParams};
+
+use frankenstein::GetFileParams;
+use llm_interface::openai::*;
+use stt_interface::STTRequest;
+use stt_interface::STTResponse;
+use telegram_interface::*;
+
+pub const TG_ADDRESS: (&str, &str, &str, &str) = ("our", "tg", "command_center", "appattacc.os");
+pub const LLM_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "openai", "command_center", "appattacc.os");
+pub const STT_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "speech_to_text", "command_center", "appattacc.os");
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "process-v0",
+});
+
+fn handle_message(
+    our: &Address,
+) -> anyhow::Result<()> {
+    println!("chatbot: handle message");
+    let message = await_message()?;
+    if message.source().node != our.node {
+        println!("chatbot: message from wrong node");
+        return Ok(());
+    }
+    println!("chatbot: message from {:?}", message.source());
+    println!("chatbot: {:#?}", message);
+    handle_telegram_message(&message)
+}
+
+pub fn handle_telegram_message(message: &Message) -> anyhow::Result<()> {
+    println!("chatbot: handle telegram message");
+    let Some(msg) = get_last_tg_msg(&message) else {
+        return Ok(());
+    };
+    let id = msg.chat.id;
+    let mut text = msg.text.clone().unwrap_or_default();
+    if let Some(voice) = msg.voice.clone() {
+        let audio = get_file(&voice.file_id)?;
+        text += &get_text(audio)?;
+        println!("chatbot: text: {}", &text);
+    }
+    let answer = get_groq_answer(&text)?;
+    let _message = send_bot_message(&answer, id);
+    Ok(())
+}
+
+fn send_bot_message(text: &str, id: i64) -> anyhow::Result<TgMessage> {
+    println!("chatbot: send bot message: {}", text);
+    let params = SendMessageParams::builder()
+        .chat_id(ChatId::Integer(id)) 
+        .text(text)
+        .build();
+    let send_message_request = serde_json::to_vec(&TgRequest::SendMessage(params))?;
+    let response = Request::to(TG_ADDRESS)
+        .body(send_message_request)
+        .send_and_await_response(30)??;
+    let TgResponse::SendMessage(message) = serde_json::from_slice(response.body())? else {
+        println!("chatbot: failed to send message");
+        return Err(anyhow::anyhow!("Failed to send message"));
+    };
+    Ok(message)
+}
+
+fn get_groq_answer(text: &str) -> anyhow::Result<String> {
+    println!("chatbot: get groq answer");
+    let request = ChatRequestBuilder::default()
+        .model("llama3-8b-8192".to_string())
+        .messages(vec![MessageBuilder::default()
+            .role("user".to_string())
+            .content(text.to_string())
+            .build()?])
+        .build()?;
+    let request = serde_json::to_vec(&LLMRequest::GroqChat(request))?;
+    let response = Request::to(LLM_ADDRESS)
+        .body(request)
+        .send_and_await_response(30)??;
+    let LLMResponse::Chat(chat) = serde_json::from_slice(response.body())? else {
+        println!("chatbot: failed to parse LLM response");
+        return Err(anyhow::anyhow!("Failed to parse LLM response"));
+    };
+    println!("{:?}", chat.choices[0].message.content.clone());
+    Ok(chat.choices[0].message.content.clone())
+}
+
+fn get_text(audio: Vec<u8>) -> anyhow::Result<String> {
+    println!("chatbot: get text");
+    let stt_request = serde_json::to_vec(&STTRequest::OpenaiTranscribe(audio))?;
+    let response = Request::to(STT_ADDRESS)
+        .body(stt_request)
+        .send_and_await_response(3)??;
+    let STTResponse::OpenaiTranscribed(text) = serde_json::from_slice(response.body())? else {
+        println!("chatbot: failed to parse STT response");
+        return Err(anyhow::anyhow!("Failed to parse STT response"));
+    };
+    Ok(text)
+}
+
+fn get_file(file_id: &str) -> anyhow::Result<Vec<u8>> {
+    println!("chatbot: get file");
+    let get_file_params = GetFileParams::builder().file_id(file_id).build();
+    let tg_request = serde_json::to_vec(&TgRequest::GetFile(get_file_params))?;
+    let _ = Request::to(TG_ADDRESS)
+        .body(tg_request)
+        .send_and_await_response(10)??; 
+    if let Some(blob) = get_blob() {
+        println!("chatbot: got file successfully");
+        return Ok(blob.bytes);
+    }
+    println!("chatbot: failed to get file");
+    Err(anyhow::anyhow!("Failed to get file"))
+}
+
+fn get_last_tg_msg(message: &Message) -> Option<TgMessage> {
+    println!("chatbot: get last tg msg");
+    let Ok(TgResponse::Update(tg_update)) = serde_json::from_slice(message.body()) else {
+        println!("chatbot: failed to parse tg update from json");
+        return None;
+    };
+    let update = tg_update.updates.last()?;
+    let msg = match &update.content {
+        UpdateContent::Message(msg) | UpdateContent::ChannelPost(msg) => msg,
+        _ => {
+            println!("chatbot: failed to parse tg update");
+            return None;
+        }
+    };
+    println!("{:?}", &msg);
+    Some(msg.clone())
+}
+
+pub fn subscribe() -> anyhow::Result<()> {
+    println!("chatbot: subscribing to telegram");
+    let subscribe_request = serde_json::to_vec(&TgRequest::Subscribe)?;
+    let result = Request::to(TG_ADDRESS)
+        .body(subscribe_request)
+        .send_and_await_response(15)??;
+    let TgResponse::Ok = serde_json::from_slice::<TgResponse>(result.body())? else {
+        println!("chatbot: failed to parse subscription response");
+        return Err(anyhow::anyhow!("Failed to parse subscription response"));
+    };
+    println!("chatbot: subscribed to telegram");
+    Ok(())
+}
+
+call_init!(init);
+fn init(our: Address) {
+    let _ = subscribe();
+    println!("chatbot: init");
+    loop {
+        match handle_message(&our) {
+            Ok(_) => {}
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+}
+
+// TODO: Requires context manager
+// TODO: Make stuff async
+
+```
+
+File: command_center/Cargo.toml
+```
+[package]
+name = "command_center"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+frankenstein = { version = "0.30", default-features = false, features = ["telegram-trait"] }
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.1" }
+llm_interface = { git = "https://github.com/kinode-dao/llm", branch = "interface"}
+stt_interface = { git = "https://github.com/kinode-dao/stt", branch = "interface"}
+telegram_interface = { git = "https://github.com/kinode-dao/telegram-bot/", branch = "zen/interface" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5.0"
+
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: command_center/src/lib.rs
+```
+use std::collections::HashMap;
+
+use kinode_process_lib::{
+    await_message, call_init, get_blob, http, Address, Message, Request, /*, println */
+};
+use llm_interface::openai::*;
+use stt_interface::*;
+use telegram_interface::*;
+
+mod structs;
+use structs::*;
+
+mod tg_api;
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "process-v0",
+});
+
+fn handle_http_message(
+    our: &Address,
+    message: &Message,
+    state: &mut Option<State>,
+    pkgs: &HashMap<Pkg, Address>,
+) -> anyhow::Result<()> {
+    println!("handle http message");
+    match message {
+        Message::Request { ref body, .. } => handle_http_request(our, state, body, pkgs),
+        Message::Response { .. } => Ok(()),
+    }
+}
+
+fn handle_http_request(
+    our: &Address,
+    state: &mut Option<State>,
+    body: &[u8],
+    pkgs: &HashMap<Pkg, Address>,
+) -> anyhow::Result<()> {
+    println!("handle http request");
+    let http_request = http::HttpServerRequest::from_bytes(body)?
+        .request()
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse http request"))?;
+    let path = http_request.path()?;
+    println!("path: {:?}", path);
+    let bytes = get_blob()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get blob"))?
+        .bytes;
+    match path.as_str() {
+        "/status" => {
+            println!("fetching status");
+            fetch_status()
+        },
+        "/submit_config" => submit_config(our, &bytes, state, pkgs),
+        _ => Ok(()),
+    }
+}
+
+fn fetch_status() -> anyhow::Result<()> {
+    let state = State::fetch()
+        .ok_or_else(|| anyhow::anyhow!("State being fetched for the first time (or failed)"))?;
+    let config = &state.config;
+    let response_body = serde_json::to_string(&config)?;
+    http::send_response(
+        http::StatusCode::OK,
+        Some(HashMap::from([(
+            "Content-Type".to_string(),
+            "application/json".to_string(),
+        )])),
+        response_body.as_bytes().to_vec(),
+    );
+    Ok(())
+}
+
+fn submit_config(
+    our: &Address,
+    body_bytes: &[u8],
+    state: &mut Option<State>,
+    pkgs: &HashMap<Pkg, Address>,
+) -> anyhow::Result<()> {
+    let initial_config = serde_json::from_slice::<InitialConfig>(body_bytes)?;
+    match state {
+        Some(state_) => {
+            println!("Modifying state to {:?}", initial_config);
+            state_.config = initial_config;
+        }
+        None => {
+            println!("Creating state {:?}", initial_config);
+            *state = Some(State::new(our, initial_config));
+        }
+    }
+
+    if let Some(ref mut state) = state {
+        for (pkg, addr) in pkgs.iter() {
+            println!("submit_config: matching pkg: {:?}", pkg);
+            match pkg {
+                Pkg::LLM => {
+                    if let Some(openai_key) = &state.config.openai_key {
+                        let req = serde_json::to_vec(&LLMRequest::RegisterOpenaiApiKey(
+                            RegisterApiKeyRequest {
+                                api_key: openai_key.clone(),
+                            },
+                        ))?;
+                        let _ = Request::new()
+                            .target(addr.clone())
+                            .body(req)
+                            .send_and_await_response(5)??;
+                    }
+                    if let Some(groq_key) = &state.config.groq_key {
+                        let req = serde_json::to_vec(
+                            &llm_interface::openai::LLMRequest::RegisterGroqApiKey(
+                                RegisterApiKeyRequest {
+                                    api_key: groq_key.clone(),
+                                },
+                            ),
+                        )?;
+                        let _ = Request::new()
+                            .target(addr.clone())
+                            .body(req)
+                            .send_and_await_response(5)??;
+                    }
+                }
+                Pkg::STT => {
+                    if let Some(openai_key) = &state.config.openai_key {
+                        let req =
+                            serde_json::to_vec(&STTRequest::RegisterApiKey(openai_key.clone()))?;
+                        let _ = Request::new()
+                            .target(addr.clone())
+                            .body(req)
+                            .send_and_await_response(5)??;
+                    }
+                }
+                Pkg::Telegram => {
+                    if let Some(telegram_key) = &state.config.telegram_key {
+                        let init = TgInitialize {
+                            token: telegram_key.clone(),
+                            params: None,
+                        };
+                        let req = serde_json::to_vec(&TgRequest::RegisterApiKey(init))?;
+                        let _ = Request::new()
+                            .target(addr.clone())
+                            .body(req)
+                            .send_and_await_response(5)??;
+                    }
+                }
+            }
+        }
+        state.save();
+
+        http::send_response(
+            http::StatusCode::OK,
+            Some(HashMap::from([(
+                "Content-Type".to_string(),
+                "application/json".to_string(),
+            )])),
+            b"{\"message\": \"success\"}".to_vec(),
+        );
+    }
+    Ok(())
+}
+
+fn handle_message(
+    our: &Address,
+    state: &mut Option<State>,
+    pkgs: &HashMap<Pkg, Address>,
+) -> anyhow::Result<()> {
+    println!("handle message");
+    let message = await_message()?;
+    if message.source().node != our.node {
+        return Ok(());
+    }
+    println!("message source: {:?}", message.source());
+    match message.source().process.to_string().as_str() {
+        "http_server:distro:sys" | "http_client:distro:sys" => {
+            handle_http_message(&our, &message, state, pkgs)
+        }
+        _ => Ok(()),
+    }
+}
+
+const ICON: &str = include_str!("icon");
+call_init!(init);
+fn init(our: Address) {
+    let _ = http::serve_ui(
+        &our,
+        "ui",
+        true,
+        false,
+        vec!["/", "/submit_config", "/status"],
+    );
+
+    let mut state = State::fetch();
+
+    // add ourselves to the homepage
+    Request::to(("our", "homepage", "homepage", "sys"))
+        .body(
+            serde_json::json!({
+                "Add": {
+                    "label": "Command Center",
+                    "icon": ICON,
+                    "path": "/", // just our root
+                }
+            })
+            .to_string()
+            .as_bytes()
+            .to_vec(),
+        )
+        .send()
+        .unwrap();
+
+    // calling RegisterApiKey because it calls getUpdates (necessary every time a process is restarted)
+    let mut pkgs = HashMap::new();
+    pkgs.insert(Pkg::LLM, Address::new(&our.node, ("openai", "command_center", "appattacc.os")));
+    pkgs.insert(Pkg::STT, Address::new(&our.node, ("speech_to_text", "command_center", "appattacc.os")));
+    pkgs.insert(Pkg::Telegram, Address::new(&our.node, ("tg", "command_center", "appattacc.os")));
+
+    match &state.clone() {
+        Some(state) => {
+            if let Some(telegram_key) = &state.config.telegram_key {
+            let init = TgInitialize {
+                token: telegram_key.clone(),
+                params: None,
+            };
+            let req = serde_json::to_vec(&TgRequest::RegisterApiKey(init));
+            let _ = Request::new()
+                .target(pkgs.get(&Pkg::Telegram).unwrap())
+                .body(req.unwrap())
+                .send_and_await_response(5);
+            }
+        }
+        None => {}
+    }
+
+    loop {
+        match handle_message(&our, &mut state, &pkgs) {
+            Ok(_) => {}
+            Err(e) => println!("Error: {:?}", e),
+        }
+    }
+}
+
+```
+
+File: command_center/src/tg_api.rs
+```
+/// API for the bot and the parent process.
+use frankenstein::{GetUpdatesParams, TelegramApi, Update};
+use kinode_process_lib::{
+    http::{send_request, send_request_await_response, Method},
+    our_capabilities, spawn, Address, OnExit, ProcessId, Request,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::{path::PathBuf, str::FromStr};
+
+static BASE_API_URL: &str = "https://api.telegram.org/bot";
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TgInitialize {
+    pub token: String,
+    pub params: Option<GetUpdatesParams>,
+}
+
+/// Enum Request received by parent process for long-polling updates.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TgResponse {
+    Update(TgUpdate),
+    Error(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TgUpdate {
+    pub updates: Vec<Update>,
+}
+
+/// function to spawn and initialize a tg bot.
+/// call this from your parent process to receive updates!
+#[allow(unused)]
+pub fn init_tg_bot(
+    our: Address,
+    token: &str,
+    params: Option<GetUpdatesParams>,
+) -> anyhow::Result<(Api, Address)> {
+    let tg_bot_wasm_path = format!("{}/pkg/tg.wasm", our.package_id());
+
+    // give spawned process both our caps, and grant http_client messaging.
+    let our_caps = our_capabilities();
+    let http_client = ProcessId::from_str("http_client:distro:sys").unwrap();
+
+    let process_id = spawn(
+        None,
+        &tg_bot_wasm_path,
+        OnExit::None,
+        our_caps,
+        vec![http_client],
+        false,
+    )?;
+
+    let api = Api::new(token, our.clone());
+    let init = TgInitialize {
+        token: token.to_string(),
+        params,
+    };
+
+    let worker_address = Address {
+        node: our.node.clone(),
+        process: process_id.clone(),
+    };
+
+    let _ = Request::new()
+        .target(worker_address.clone())
+        .body(serde_json::to_vec(&init)?)
+        .send();
+
+    Ok((api, worker_address))
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Api {
+    pub api_url: String,
+    pub our: Address,
+    pub current_offset: u32,
+}
+
+impl Api {
+    #[must_use]
+    pub fn new(api_key: &str, our: Address) -> Self {
+        let api_url = format!("{BASE_API_URL}{api_key}");
+        Self {
+            api_url,
+            our,
+            current_offset: 0,
+        }
+    }
+}
+
+impl TelegramApi for Api {
+    type Error = anyhow::Error;
+
+    fn request<T1: serde::ser::Serialize, T2: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Option<T1>,
+    ) -> Result<T2, anyhow::Error> {
+        let url = format!("{}/{method}", self.api_url);
+        let url = url::Url::from_str(&url)?;
+
+        // content-type application/json
+        let headers: HashMap<String, String> =
+            HashMap::from_iter([("Content-Type".into(), "application/json".into())]);
+
+        let body = if let Some(ref params) = params {
+            serde_json::to_vec(params)?
+        } else {
+            Vec::new()
+        };
+        let res = send_request_await_response(Method::GET, url, Some(headers), 30, body)?;
+
+        let deserialized: T2 = serde_json::from_slice(&res.body())
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize response body: {}", e))?;
+
+        Ok(deserialized)
+    }
+
+    fn request_with_form_data<T1: serde::ser::Serialize, T2: serde::de::DeserializeOwned>(
+        &self,
+        _method: &str,
+        _params: T1,
+        _files: Vec<(&str, PathBuf)>,
+    ) -> Result<T2, anyhow::Error> {
+        return Err(anyhow::anyhow!(
+            "tgbot doesn't support multipart uploads (yet!)"
+        ));
+    }
+}
+
+impl Api {
+    #[allow(unused)]
+    pub fn request_no_wait<T1: serde::ser::Serialize>(
+        &self,
+        method: &str,
+        params: Option<T1>,
+    ) -> Result<(), anyhow::Error> {
+
+        let url = format!("{}/{method}", self.api_url);
+        let url = url::Url::from_str(&url)?;
+
+        // content-type application/json
+        let headers: HashMap<String, String> =
+            HashMap::from_iter([("Content-Type".into(), "application/json".into())]);
+
+        let body = if let Some(ref params) = params {
+            serde_json::to_vec(params)?
+        } else {
+            Vec::new()
+        };
+        send_request(Method::GET, url, Some(headers), Some(20), body);
+        Ok(())
+    }
+}
+
+```
+
+File: command_center/src/structs.rs
+```
+use serde::{Deserialize, Serialize};
+use kinode_process_lib::{get_state, set_state, Address};
+
+#[derive(Debug, Eq, Hash, PartialEq, Clone, Serialize, Deserialize)]
+pub enum Pkg {
+    LLM,
+    STT,
+    Telegram,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct State {
+    pub our: Address,
+    pub config: InitialConfig,
+}
+
+impl State {
+    pub fn new(our: &Address, config: InitialConfig) -> Self {
+        State {
+            our: our.clone(),
+            config,
+        }
+    }
+
+    pub fn fetch() -> Option<State> {
+        if let Some(state_bytes) = get_state() {
+            bincode::deserialize(&state_bytes).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&self) {
+        let serialized_state = bincode::serialize(self).expect("Failed to serialize state");
+        set_state(&serialized_state);
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct InitialConfig {
+    pub telegram_key: Option<String>,
+    pub openai_key: Option<String>,
+    pub groq_key: Option<String>,
+}
+
+```
+
+File: vectorbase/Cargo.toml
+```
+[package]
+name = "vectorbase"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bincode = "1.3.3"
+kinode_process_lib = { git = "https://github.com/kinode-dao/process_lib", tag = "v0.8.0" }
+vectorbase_interface = { git = "https://github.com/kinode-dao/command_center", branch = "vectorbase_interface" }
+llm_interface = { git = "https://github.com/kinode-dao/llm", branch = "interface"}
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen = "0.24.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "kinode:process"
+
+```
+
+File: vectorbase/src/similarity_search.rs
+```
+use std::collections::HashMap;
+use crate::structs::Element;
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let magnitude_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let magnitude_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    dot_product / (magnitude_a * magnitude_b)
+}
+
+pub fn similarity_search(
+    database: &HashMap<String, Element>,
+    query_embedding: &[f32],
+    top_k: usize
+) -> Vec<(String, String)> {
+    let mut similarities: Vec<(f32, &String, &Element)> = database
+        .iter()
+        .map(|(key, element)| {
+            (cosine_similarity(query_embedding, &element.embedding.as_ref().unwrap()), key, element)
+        })
+        .collect();
+
+    similarities.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    similarities
+        .into_iter()
+        .take(top_k)
+        .map(|(_, key, element)| (key.clone(), element.text.clone()))
+        .collect()
+}
+```
+
+File: vectorbase/src/lib.rs
+```
+use std::collections::HashMap;
+
+use kinode_process_lib::{
+    await_message, call_init, println, Address, Message, Request, Response,
+};
+use llm_interface::openai::{
+    EmbeddingRequest, LLMRequest as OpenAIRequest, LLMResponse as OpenAIResponse,
+};
+use vectorbase_interface::{Request as VectorbaseRequest, Response as VectorbaseResponse};
+
+mod structs;
+use structs::*;
+
+mod similarity_search;
+use similarity_search::similarity_search;
+
+wit_bindgen::generate!({
+    path: "target/wit",
+    world: "process-v0",
+});
+
+pub const LLM_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "openai", "command_center", "appattacc.os");
+
+fn handle_message(our: &Address, state: &mut State) -> anyhow::Result<()> {
+    let message = await_message()?;
+    if message.source().node != our.node {
+        println!("vectorbase: message from wrong node");
+        return Ok(());
+    }
+    match message {
+        Message::Request { ref body, .. } => handle_internal_request(state, body),
+        Message::Response { .. } => Ok(()),
+    }
+}
+
+fn handle_internal_request(state: &mut State, body: &[u8]) -> anyhow::Result<()> {
+    let request = serde_json::from_slice::<VectorbaseRequest>(body)?;
+    match request {
+        VectorbaseRequest::ListDatabases => list_databases(state),
+        VectorbaseRequest::SubmitData {
+            database_name,
+            values,
+        } => submit_data(state, database_name, values),
+        VectorbaseRequest::SemanticSearch {
+            database_name,
+            top_k,
+            query,
+        } => semantic_search(state, database_name, top_k, query),
+    }
+}
+
+fn list_databases(state: &State) -> anyhow::Result<()> {
+    let database_names: Vec<String> = state.databases.keys().cloned().collect();
+    let response = VectorbaseResponse::ListDatabases(database_names);
+    let response_body = serde_json::to_vec(&response)?;
+    Response::new().body(response_body).send()?;
+    Ok(())
+}
+
+fn submit_data(
+    state: &mut State,
+    database_name: String,
+    values: Vec<(String, String)>,
+) -> anyhow::Result<()> {
+    let database = state
+        .databases
+        .entry(database_name)
+        .or_insert_with(HashMap::new);
+
+    for (entry_name, text) in values {
+        database.insert(
+            entry_name,
+            Element {
+                text,
+                embedding: None,
+            },
+        );
+    }
+    state.save();
+
+    Response::new()
+        .body(serde_json::to_vec(&VectorbaseResponse::SubmitData)?)
+        .send()?;
+
+    Ok(())
+}
+
+fn get_embeddings(texts: Vec<String>) -> anyhow::Result<Vec<Vec<f32>>> {
+    let embedding_request = EmbeddingRequest {
+        model: "text-embedding-3-large".to_string(),
+        input: texts,
+    };
+    let openai_request = serde_json::to_vec(&OpenAIRequest::Embedding(embedding_request))?;
+    let response = Request::to(LLM_ADDRESS)
+        .body(openai_request)
+        .send_and_await_response(30)??;
+    let OpenAIResponse::Embedding(embedding_response) = serde_json::from_slice(response.body())?
+    else {
+        return Err(anyhow::anyhow!("Failed to parse embedding response"));
+    };
+    Ok(embedding_response.embeddings)
+}
+
+fn update_embeddings(state: &mut State, database_name: &str) -> anyhow::Result<()> {
+    let Some(database) = state.databases.get_mut(database_name) else {
+        return Err(anyhow::anyhow!("Database not found"));
+    };
+
+    let mut texts_to_embed = Vec::new();
+    let mut elements_to_update = Vec::new();
+
+    for (entry_name, element) in database.iter_mut() {
+        if element.embedding.is_none() {
+            texts_to_embed.push(element.text.clone());
+            elements_to_update.push(entry_name.clone());
+        }
+    }
+
+    if !texts_to_embed.is_empty() {
+        let embeddings = get_embeddings(texts_to_embed)?;
+
+        for (entry_name, embedding) in elements_to_update.into_iter().zip(embeddings) {
+            if let Some(element) = database.get_mut(&entry_name) {
+                element.embedding = Some(embedding);
+            }
+        }
+
+        state.save();
+    }
+
+    Ok(())
+}
+
+
+fn semantic_search(
+    state: &mut State,
+    database_name: String,
+    top_k: usize,
+    query: String,
+) -> anyhow::Result<()> {
+    update_embeddings(state, &database_name)?;
+    let query_embedding = get_embeddings(vec![query.clone()])?[0].clone();
+
+    let Some(vec_database) = state.databases.get(&database_name) else {
+        Response::new()
+            .body(serde_json::to_vec(&VectorbaseResponse::Error(
+                "Database not found".to_string(),
+            ))?)
+            .send()?;
+        return Ok(());
+    };
+    let top_results = similarity_search(vec_database, &query_embedding, top_k);
+
+    let response = VectorbaseResponse::SemanticSearch(top_results);
+    Response::new()
+        .body(serde_json::to_vec(&response)?)
+        .send()?;
+    Ok(())
+}
+
+call_init!(init);
+fn init(our: Address) {
+    println!("Begin: {:?}", our.process.process_name);
+
+    let mut state = State::fetch().unwrap_or_default();
+
+    loop {
+        match handle_message(&our, &mut state) {
+            Ok(()) => {}
+            Err(e) => {
+                println!("error: {:?}", e);
+            }
+        };
+    }
+}
+
+// TODO: Zena: Maybe we can add some kind of intermittent embedding population? 
+```
+
+File: vectorbase/src/structs.rs
+```
+use kinode_process_lib::{get_state, set_state};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct State {
+    pub databases: HashMap<String, HashMap<String, Element>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct Element {
+    pub text: String,
+    pub embedding: Option<Vec<f32>>,
+}
+
+impl State {
+    pub fn fetch() -> Option<State> {
+        if let Some(state_bytes) = get_state() {
+            bincode::deserialize(&state_bytes).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&self) {
+        let serialized_state = bincode::serialize(self).expect("Failed to serialize state");
+        set_state(&serialized_state);
+    }
+}
+
+```
+
+File: pkg/scripts.json
+```
+{
+    "send.wasm": {
+        "root": false,
+        "public": false,
+        "request_networking": false,
+        "request_capabilities": [
+            "main:command_center:appattacc.os"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os"
+        ]
+    }
+}
+
+```
+
+File: pkg/manifest.json
+```
+[
+    {
+        "process_name": "main",
+        "process_wasm_path": "/command_center.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys",
+            "http_client:distro:sys",
+            "openai:llm:kinode",
+            "vfs:distro:sys",
+            "homepage:homepage:sys",
+            "sqlite:distro:sys"
+        ],
+        "grant_capabilities": [
+            "http_server:distro:sys",
+            "http_client:distro:sys",
+            "openai:command_center:appattacc.os",
+            "speech_to_text:command_center:appattacc.os",
+            "tg:command_center:appattacc.os",
+            "sqlite:distro:sys"
+        ],
+        "public": false
+    },
+    {
+        "process_name": "tg",
+        "process_wasm_path": "/tg.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys",
+            "http_client:distro:sys",
+            "net:distro:sys",
+            "sqlite:distro:sys"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os",
+            "http_server:distro:sys",
+            "http_client:distro:sys",
+            "sqlite:distro:sys"
+        ],
+        "public": false
+    },
+    {
+        "process_name": "speech_to_text",
+        "process_wasm_path": "/speech_to_text.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys",
+            "http_client:distro:sys"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os",
+            "http_server:distro:sys",
+            "http_client:distro:sys"
+        ],
+        "public": false
+    },
+    {
+        "process_name": "openai",
+        "process_wasm_path": "/openai.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_client:distro:sys"
+        ],
+        "grant_capabilities": [
+            "http_client:distro:sys",
+            "http_server:distro:sys",
+            "main:command_center:appattacc.os"
+        ],
+        "public": true
+    },
+    {
+        "process_name": "ai_chatbot_demo",
+        "process_wasm_path": "/ai_chatbot_demo.wasm",
+        "on_exit": "None",
+        "request_networking": true,
+        "request_capabilities": [
+            "http_server:distro:sys",
+            "main:command_center:appattacc.os",
+            "tg:command_center:appattacc.os",
+            "speech_to_text:command_center:appattacc.os",
+            "openai:command_center:appattacc.os"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os",
+            "tg:command_center:appattacc.os",
+            "speech_to_text:command_center:appattacc.os",
+            "openai:command_center:appattacc.os"
+        ],
+        "public": false
+    },
+    {
+        "process_name": "storage",
+        "process_wasm_path": "/storage.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "main:command_center:appattacc.os",
+            "http_server:distro:sys",
+            "http_client:distro:sys", 
+            "vfs:distro:sys"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os",
+            "http_client:distro:sys",
+            "http_server:distro:sys"
+        ],
+        "public": true
+    },
+    {
+        "process_name": "vectorbase",
+        "process_wasm_path": "/vectorbase.wasm",
+        "on_exit": "Restart",
+        "request_networking": true,
+        "request_capabilities": [
+            "main:command_center:appattacc.os",
+            "vfs:distro:sys",
+            "openai:command_center:appattacc.os"
+        ],
+        "grant_capabilities": [
+            "main:command_center:appattacc.os"
+        ],
+        "public": true
+    }
+
+]
+```
+
+
