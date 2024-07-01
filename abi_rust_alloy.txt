@@ -1,0 +1,2 @@
+alloy-sol-types = { version = "0.7.6", features = ["json"] }
+alloy-contract = "0.1.3"

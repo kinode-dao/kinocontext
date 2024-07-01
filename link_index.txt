@@ -12,3 +12,6 @@ https://github.com/kinode-dao/telegram-bot/blob/zen/interface/telegram_interface
 
 Vectorbase: Ability to do RAG (i.e. enriching a prompt) or vector similarity search: 
 https://github.com/kinode-dao/command_center/blob/vectorbase_interface/vectorbase_interface/src/lib.rs
+
+How do I interact with an ABI from Alloy/Rust?
+https://github.com/alloy-rs/examples/blob/a3c5ca538fbad98427681412d0a7ff564c47b843/examples/contracts/examples/interact_with_abi.rs
