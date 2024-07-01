@@ -1,0 +1,18 @@
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)] // untagged as a meta-type for all incoming requests
+pub enum Req {
+    LocalRequest(LocalRequest),
+    RemoteRequest(RemoteRequest),
+    FTWorkerCommand(FTWorkerCommand),
+    FTWorkerResult(FTWorkerResult),
+    Eth(eth::EthSubResult),
+    Http(http::HttpServerRequest),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)] // untagged as a meta-type for all incoming responses
+pub enum Resp {
+    LocalResponse(LocalResponse),
+    RemoteResponse(RemoteResponse),
+    FTWorkerResult(FTWorkerResult),
+}

@@ -20,3 +20,12 @@ https://github.com/kinode-dao/kinocontext/blob/main/abi_rust_alloy.txt
 How do I share a library of types across multiple processes?
 https://github.com/dr-frmr/graffitech/tree/main
 # TODO: Zena: Should we do this recursively? 
+
+How do I switch on multiple enum types in my Kinode process matching?
+https://github.com/kinode-dao/kinocontext/blob/main/meta_num.txt
+
+Deal with Logs and Events
+handle_log https://github.com/kinode-dao/kinode/blob/3719ab38e19143a7bcd501fd245c7a10b2239ee7/kinode/packages/kns_indexer/kns_indexer/src/lib.rs#L324
+Get them from Eth: https://github.com/kinode-dao/kinode/blob/3719ab38e19143a7bcd501fd245c7a10b2239ee7/kinode/packages/kns_indexer/kns_indexer/src/lib.rs#L154
+Subscribe: https://github.com/kinode-dao/kinode/blob/3719ab38e19143a7bcd501fd245c7a10b2239ee7/kinode/packages/kns_indexer/kns_indexer/src/lib.rs#L267
+use sol!-generated Events to handle them one-by-one: https://github.com/alloy-rs/examples/blob/main/examples/subscriptions/examples/subscribe_all_logs.rs#L44
