@@ -1,17 +1,5 @@
-These are the addresses: 
-```
-pub const TG_ADDRESS: (&str, &str, &str, &str) = ("our", "tg", "command_center", "appattacc.os");
-pub const LLM_ADDRESS: (&str, &str, &str, &str) =
-    ("our", "openai", "command_center", "appattacc.os");
-pub const STT_ADDRESS: (&str, &str, &str, &str) =
-    ("our", "speech_to_text", "command_center", "appattacc.os");
-pub const VECTORBASE_ADDRESS: (&str, &str, &str, &str) =
-    ("our", "vectorbase", "command_center", "appattacc.os");
-``` 
-
 To get a list of the addresses, fetch: 
-
-
+https://github.com/kinode-dao/kinocontext/blob/main/addresses.txt
 
 Speech to text: enter any audio and you will receive the transcript. Registering api keys should be done by command center already. 
 https://github.com/kinode-dao/stt/blob/interface/stt_interface/src/lib.rs

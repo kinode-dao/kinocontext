@@ -1,0 +1,10 @@
+These are the addresses: 
+```
+pub const TG_ADDRESS: (&str, &str, &str, &str) = ("our", "tg", "command_center", "appattacc.os");
+pub const LLM_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "openai", "command_center", "appattacc.os");
+pub const STT_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "speech_to_text", "command_center", "appattacc.os");
+pub const VECTORBASE_ADDRESS: (&str, &str, &str, &str) =
+    ("our", "vectorbase", "command_center", "appattacc.os");
+``` 
